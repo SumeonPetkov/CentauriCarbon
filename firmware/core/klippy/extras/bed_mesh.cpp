@@ -3,6 +3,7 @@
 #include "klippy.h"
 #include "my_string.h"
 #include "Define_config_path.h"
+#include <cctype>
 #define LOG_TAG "bed_mesh"
 #undef LOG_LEVEL
 #define LOG_LEVEL LOG_DEBUG
@@ -10,6 +11,32 @@
 #define PROFILE_VERSION 1
 #define PROFILE_PREFIX_NAME "besh_profile"
 #define PROFILE_PREFIX_SUFFIX_NAME "default"
+#define PROFILE_NAMED_PREFIX "named_"
+#define ACTIVE_MESH_PROFILE_OPTION "active_mesh_profile"
+
+static std::string normalize_mesh_profile_name(const std::string &name)
+{
+    std::string normalized;
+    normalized.reserve(name.size());
+    for (char c : name)
+    {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (isalnum(uc) || c == '_')
+        {
+            normalized.push_back((char)tolower(uc));
+        }
+        else if (c == '-' || c == ' ')
+        {
+            normalized.push_back('_');
+        }
+    }
+    return normalized;
+}
+
+static std::string build_named_profile_section(const std::string &profile_name)
+{
+    return std::string(PROFILE_PREFIX_NAME) + "_" + PROFILE_NAMED_PREFIX + profile_name;
+}
 /**
  * @brief 这个函数有四个参数，其中a和b是要比较的两个double类型的数值。
  *
@@ -118,6 +145,8 @@ BedMesh::BedMesh(std::string section_name)
     Printer::GetInstance()->m_gcode->register_command("BED_MESH_OFFSET", std::bind(&BedMesh::cmd_BED_MESH_OFFSET, this, std::placeholders::_1), false, cmd_BED_MESH_OFFSET_help);
     Printer::GetInstance()->m_gcode->register_command("BED_MESH_APPLICATIONS", std::bind(&BedMesh::cmd_BED_MESH_APPLICATIONS, this, std::placeholders::_1), false);
     Printer::GetInstance()->m_gcode->register_command("BED_MESH_SET_INDEX", std::bind(&BedMesh::cmd_BED_MESH_SET_INDEX, this, std::placeholders::_1), false);
+    Printer::GetInstance()->m_gcode->register_command("SET_ACTIVE_MESH", std::bind(&BedMesh::cmd_SET_ACTIVE_MESH, this, std::placeholders::_1), false);
+    Printer::GetInstance()->m_gcode->register_command("CALIBRATE_BED_SURFACE", std::bind(&BedMesh::cmd_CALIBRATE_BED_SURFACE, this, std::placeholders::_1), false);
 
     // Register transform
     Printer::GetInstance()->m_gcode_move->set_move_transform(std::bind(&BedMesh::move, this, std::placeholders::_1, std::placeholders::_2));
@@ -132,6 +161,14 @@ void BedMesh::handle_connect()
 {
     m_bmc->print_generated_points();
     m_pmgr->initialize();
+    std::string active_profile = get_active_mesh_profile();
+    if (active_profile != "")
+    {
+        if (!m_pmgr->load_profile_by_name(active_profile))
+        {
+            LOG_E("Failed to load active bed mesh profile '%s' during startup\n", active_profile.c_str());
+        }
+    }
 }
 
 void BedMesh::set_mesh(ZMesh *mesh)
@@ -337,6 +374,75 @@ void BedMesh::cmd_BED_MESH_SET_INDEX(GCodeCommand &gcmd)
     m_bmc->set_mesh_config();
     // m_bmc->print_generated_points();
     m_pmgr->load_profile(PROFILE_PREFIX_SUFFIX_NAME);
+}
+
+std::string BedMesh::get_active_mesh_profile()
+{
+    return Printer::GetInstance()->m_pconfig->GetString("bed_mesh", ACTIVE_MESH_PROFILE_OPTION, "");
+}
+
+void BedMesh::set_active_mesh_profile(const std::string &profile_name)
+{
+    Printer::GetInstance()->m_pconfig->SetValue("bed_mesh", ACTIVE_MESH_PROFILE_OPTION, profile_name);
+    Printer::GetInstance()->m_pconfig->WriteIni(CONFIG_PATH);
+    Printer::GetInstance()->m_pconfig->WriteI_specified_Ini(USER_CONFIG_PATH, "bed_mesh", {ACTIVE_MESH_PROFILE_OPTION});
+}
+
+void BedMesh::cmd_SET_ACTIVE_MESH(GCodeCommand &gcmd)
+{
+    std::string mesh_name = normalize_mesh_profile_name(gcmd.get_string("MESH", ""));
+    if (mesh_name == "")
+    {
+        gcmd.m_respond_info("SET_ACTIVE_MESH requires MESH=<profile_name>", true);
+        return;
+    }
+    if (!m_pmgr->load_profile_by_name(mesh_name))
+    {
+        gcmd.m_respond_info("Unable to load mesh profile [" + mesh_name + "]", true);
+        return;
+    }
+    set_active_mesh_profile(mesh_name);
+    gcmd.m_respond_info("Active mesh set to [" + mesh_name + "]", true);
+}
+
+void BedMesh::cmd_CALIBRATE_BED_SURFACE(GCodeCommand &gcmd)
+{
+    std::string bed_name = normalize_mesh_profile_name(gcmd.get_string("BED", ""));
+    std::string surface_name = normalize_mesh_profile_name(gcmd.get_string("SURFACE", ""));
+    int bed_temp = gcmd.get_int("TEMP", -1);
+    int soak_seconds = gcmd.get_int("SOAK", 0, 0);
+    bool should_home = gcmd.get_int("HOME", 1, 0, 1) == 1;
+    std::string profile_name = normalize_mesh_profile_name(gcmd.get_string("PROFILE", ""));
+
+    if (bed_temp < 0)
+    {
+        gcmd.m_respond_info("CALIBRATE_BED_SURFACE requires TEMP=<bed_temp>", true);
+        return;
+    }
+    if (profile_name == "")
+    {
+        if (bed_name == "" || surface_name == "")
+        {
+            gcmd.m_respond_info("CALIBRATE_BED_SURFACE requires BED= and SURFACE= when PROFILE is not provided", true);
+            return;
+        }
+        profile_name = bed_name + "_" + surface_name + "_" + to_string(bed_temp);
+    }
+
+    if (should_home)
+    {
+        Printer::GetInstance()->m_gcode_io->single_command("G28");
+    }
+    Printer::GetInstance()->m_gcode_io->single_command("M140 S" + to_string(bed_temp));
+    Printer::GetInstance()->m_gcode_io->single_command("M190 S" + to_string(bed_temp));
+    if (soak_seconds > 0)
+    {
+        Printer::GetInstance()->m_gcode_io->single_command("G4 S" + to_string(soak_seconds));
+    }
+    Printer::GetInstance()->m_gcode_io->single_command("BED_MESH_CLEAR");
+    Printer::GetInstance()->m_gcode_io->single_command("BED_MESH_CALIBRATE");
+    Printer::GetInstance()->m_gcode_io->single_command("BED_MESH_PROFILE SAVE=" + profile_name);
+    Printer::GetInstance()->m_gcode_io->single_command("SET_ACTIVE_MESH MESH=" + profile_name);
 }
 
 void BedMesh::get_status(double eventtime) // 暂时没发现这部分代码作用
@@ -1929,8 +2035,8 @@ ProfileManager::ProfileManager(std::string section_name, BedMesh *bedmesh)
     // {
     //     printf("read_points %f\n", m_profiles.points[i]);
     // }
-    // m_cmd_BED_MESH_PROFILE_help = "Bed Mesh Persistent Storage management";
-    // Printer::GetInstance()->m_gcode->register_command("BED_MESH_PROFILE", std::bind(&ProfileManager::cmd_BED_MESH_PROFILE, this, std::placeholders::_1), false, m_cmd_BED_MESH_PROFILE_help);
+    m_cmd_BED_MESH_PROFILE_help = "Bed Mesh Persistent Storage management";
+    Printer::GetInstance()->m_gcode->register_command("BED_MESH_PROFILE", std::bind(&ProfileManager::cmd_BED_MESH_PROFILE, this, std::placeholders::_1), false, m_cmd_BED_MESH_PROFILE_help);
 }
 
 ProfileManager::~ProfileManager()
@@ -2044,7 +2150,163 @@ void ProfileManager::save_profile(std::string prof_name)
            prof_name.c_str());
 }
 
-void ProfileManager::load_profile(std::string prof_name)
+bool ProfileManager::save_named_profile(std::string prof_name)
+{
+    std::string normalized_name = normalize_mesh_profile_name(prof_name);
+    if (normalized_name == "")
+    {
+        return false;
+    }
+    ZMesh *z_mesh = m_bedmesh->get_mesh();
+    if (!z_mesh)
+    {
+        return false;
+    }
+    std::vector<std::vector<double>> probed_matrix = z_mesh->get_probed_matrix();
+    mesh_config mesh_params = z_mesh->get_mesh_params();
+    std::string cfg_name = build_named_profile_section(normalized_name);
+
+    std::string values;
+    for (const auto &line : probed_matrix)
+    {
+        for (const auto &p : line)
+        {
+            values += std::to_string(p) + ", ";
+        }
+    }
+    if (values.size() >= 2)
+    {
+        values = values.substr(0, values.size() - 2);
+    }
+    Printer::GetInstance()->m_pconfig->SetInt(cfg_name, "version", PROFILE_VERSION);
+    Printer::GetInstance()->m_pconfig->SetValue(cfg_name, "points", values);
+
+    values.clear();
+    for (auto it = mesh_params.mesh_max.begin(); it != mesh_params.mesh_max.end(); ++it)
+    {
+        values += std::to_string(*it);
+        if (it != mesh_params.mesh_max.end() - 1)
+        {
+            values += ", ";
+        }
+    }
+    Printer::GetInstance()->m_pconfig->SetValue(cfg_name, "mesh_max", values);
+    values.clear();
+    for (auto it = mesh_params.mesh_min.begin(); it != mesh_params.mesh_min.end(); ++it)
+    {
+        values += std::to_string(*it);
+        if (it != mesh_params.mesh_min.end() - 1)
+        {
+            values += ", ";
+        }
+    }
+    Printer::GetInstance()->m_pconfig->SetValue(cfg_name, "mesh_min", values);
+    Printer::GetInstance()->m_pconfig->SetValue(cfg_name, "algo", mesh_params.algo);
+    Printer::GetInstance()->m_pconfig->SetDouble(cfg_name, "max_x", mesh_params.max_x);
+    Printer::GetInstance()->m_pconfig->SetDouble(cfg_name, "min_x", mesh_params.min_x);
+    Printer::GetInstance()->m_pconfig->SetDouble(cfg_name, "max_y", mesh_params.max_y);
+    Printer::GetInstance()->m_pconfig->SetDouble(cfg_name, "min_y", mesh_params.min_y);
+    Printer::GetInstance()->m_pconfig->SetInt(cfg_name, "mesh_x_pps", mesh_params.mesh_x_pps);
+    Printer::GetInstance()->m_pconfig->SetInt(cfg_name, "mesh_y_pps", mesh_params.mesh_y_pps);
+    Printer::GetInstance()->m_pconfig->SetInt(cfg_name, "x_count", mesh_params.x_count);
+    Printer::GetInstance()->m_pconfig->SetInt(cfg_name, "y_count", mesh_params.y_count);
+    m_current_profile = normalized_name;
+    Printer::GetInstance()->m_pconfig->WriteIni(CONFIG_PATH);
+    Printer::GetInstance()->m_pconfig->WriteI_specified_Ini(USER_CONFIG_PATH, cfg_name, {});
+    return true;
+}
+
+bool ProfileManager::load_named_profile(std::string prof_name)
+{
+    std::string normalized_name = normalize_mesh_profile_name(prof_name);
+    if (normalized_name == "")
+    {
+        return false;
+    }
+    std::string cfg_name = build_named_profile_section(normalized_name);
+    if (!Printer::GetInstance()->m_pconfig->IsExistSection(cfg_name))
+    {
+        return false;
+    }
+
+    m_bedmesh->m_bmc->m_mesh_config.mesh_max = parse_pair(cfg_name, "mesh_max", "");
+    m_bedmesh->m_bmc->m_mesh_config.mesh_min = parse_pair(cfg_name, "mesh_min", "");
+    std::vector<double> points_read = parse_pair(cfg_name, "points", "");
+    m_bedmesh->m_bmc->m_mesh_config.algo = Printer::GetInstance()->m_pconfig->GetString(cfg_name, "algo", "");
+    m_bedmesh->m_bmc->m_mesh_config.max_x = Printer::GetInstance()->m_pconfig->GetDouble(cfg_name, "max_x", 0.0f);
+    m_bedmesh->m_bmc->m_mesh_config.min_x = Printer::GetInstance()->m_pconfig->GetDouble(cfg_name, "min_x", 0.0f);
+    m_bedmesh->m_bmc->m_mesh_config.max_y = Printer::GetInstance()->m_pconfig->GetDouble(cfg_name, "max_y", 0.0f);
+    m_bedmesh->m_bmc->m_mesh_config.min_y = Printer::GetInstance()->m_pconfig->GetDouble(cfg_name, "min_y", 0.0f);
+    m_bedmesh->m_bmc->m_mesh_config.mesh_x_pps = Printer::GetInstance()->m_pconfig->GetInt(cfg_name, "mesh_x_pps", 2);
+    m_bedmesh->m_bmc->m_mesh_config.mesh_y_pps = Printer::GetInstance()->m_pconfig->GetInt(cfg_name, "mesh_y_pps", 2);
+    m_bedmesh->m_bmc->m_mesh_config.x_count = Printer::GetInstance()->m_pconfig->GetInt(cfg_name, "x_count", 0);
+    m_bedmesh->m_bmc->m_mesh_config.y_count = Printer::GetInstance()->m_pconfig->GetInt(cfg_name, "y_count", 0);
+
+    if (m_bedmesh->m_bmc->m_mesh_config.x_count <= 0 || m_bedmesh->m_bmc->m_mesh_config.y_count <= 0)
+    {
+        return false;
+    }
+
+    int expected_points = m_bedmesh->m_bmc->m_mesh_config.x_count * m_bedmesh->m_bmc->m_mesh_config.y_count;
+    if ((int)points_read.size() < expected_points)
+    {
+        return false;
+    }
+    std::vector<std::vector<double>> matrix(m_bedmesh->m_bmc->m_mesh_config.x_count, std::vector<double>(m_bedmesh->m_bmc->m_mesh_config.y_count));
+    for (int i = 0; i < m_bedmesh->m_bmc->m_mesh_config.x_count; i++)
+    {
+        for (int j = 0; j < m_bedmesh->m_bmc->m_mesh_config.y_count; j++)
+        {
+            matrix[i][j] = points_read[m_bedmesh->m_bmc->m_mesh_config.y_count * i + j];
+        }
+    }
+    if (m_z_mesh != nullptr)
+    {
+        delete m_z_mesh;
+    }
+    m_z_mesh = new ZMesh(m_bedmesh->m_bmc->m_mesh_config);
+    m_z_mesh->build_mesh(matrix);
+    m_current_profile = normalized_name;
+    m_bedmesh->set_mesh(m_z_mesh);
+    return true;
+}
+
+bool ProfileManager::load_profile_by_name(std::string prof_name)
+{
+    std::string normalized_name = normalize_mesh_profile_name(prof_name);
+    if (normalized_name == "")
+    {
+        return false;
+    }
+    if (normalized_name == PROFILE_PREFIX_SUFFIX_NAME)
+    {
+        return load_profile(PROFILE_PREFIX_SUFFIX_NAME);
+    }
+    if (load_named_profile(normalized_name))
+    {
+        return true;
+    }
+    return load_profile(normalized_name);
+}
+
+bool ProfileManager::remove_named_profile(std::string prof_name)
+{
+    std::string normalized_name = normalize_mesh_profile_name(prof_name);
+    if (normalized_name == "")
+    {
+        return false;
+    }
+    std::string cfg_name = build_named_profile_section(normalized_name);
+    if (!Printer::GetInstance()->m_pconfig->IsExistSection(cfg_name))
+    {
+        return false;
+    }
+    Printer::GetInstance()->m_pconfig->DeleteSection(cfg_name);
+    Printer::GetInstance()->m_pconfig->WriteIni(CONFIG_PATH);
+    return true;
+}
+
+bool ProfileManager::load_profile(std::string prof_name)
 {
     std::string cfg_name = PROFILE_PREFIX_NAME;
     cfg_name += "_";
@@ -2063,7 +2325,7 @@ void ProfileManager::load_profile(std::string prof_name)
     {
         LOG_D("没有参数,不进行读取\n");
         m_bedmesh->set_mesh(nullptr);
-        return;
+        return false;
     }
     // struct mesh_config params;
     m_bedmesh->m_bmc->m_mesh_config.mesh_max = parse_pair(cfg_name, "mesh_max", "");
@@ -2088,7 +2350,7 @@ void ProfileManager::load_profile(std::string prof_name)
     {
         for (int j = 0; j < m_bedmesh->m_bmc->m_mesh_config.y_count; j++)
         {
-            matrix[i][j] = points_read[m_bedmesh->m_bmc->m_mesh_config.x_count * i + j];
+            matrix[i][j] = points_read[m_bedmesh->m_bmc->m_mesh_config.y_count * i + j];
         }
     }
     // }
@@ -2102,7 +2364,7 @@ void ProfileManager::load_profile(std::string prof_name)
     //         }
     //     }
     // }
-    if (m_z_mesh == nullptr)
+    if (m_z_mesh != nullptr)
     {
         delete m_z_mesh;
     }
@@ -2110,6 +2372,7 @@ void ProfileManager::load_profile(std::string prof_name)
     m_z_mesh->build_mesh(matrix);                          // matrix 没有插值的原矩阵
     m_current_profile = prof_name;
     m_bedmesh->set_mesh(m_z_mesh);
+    return true;
 }
 
 void ProfileManager::remove_profile(std::string prof_name)
@@ -2129,20 +2392,45 @@ void ProfileManager::remove_profile(std::string prof_name)
 
 void ProfileManager::cmd_BED_MESH_PROFILE(GCodeCommand &gcmd)
 {
-    // options = collections.OrderedDict({
-    //     'LOAD': m_load_profile,
-    //     'SAVE': m_save_profile,
-    //     'REMOVE': m_remove_profile
-    // })
-    // for key in options:
-    //     name = gcmd.get(key, None)
-    //     if name is not None:
-    //         if name == "default" and key == 'SAVE':
-    //             gcmd.respond_info(
-    //                 "Profile 'default' is reserved, please choose"
-    //                 " another profile name.")
-    //         else:
-    //             options[key](name)
-    //         return
-    // gcmd.respond_info("Invalid syntax '%s'" % (gcmd.get_commandline(),))
+    std::string load_name = normalize_mesh_profile_name(gcmd.get_string("LOAD", ""));
+    std::string save_name = normalize_mesh_profile_name(gcmd.get_string("SAVE", ""));
+    std::string remove_name = normalize_mesh_profile_name(gcmd.get_string("REMOVE", ""));
+
+    if (load_name != "")
+    {
+        if (!load_profile_by_name(load_name))
+        {
+            gcmd.m_respond_info("No mesh profile named [" + load_name + "]", true);
+            return;
+        }
+        gcmd.m_respond_info("Loaded mesh profile [" + load_name + "]", true);
+        return;
+    }
+    if (save_name != "")
+    {
+        if (save_name == PROFILE_PREFIX_SUFFIX_NAME)
+        {
+            gcmd.m_respond_info("Profile 'default' is reserved as the fallback profile", true);
+            return;
+        }
+        if (!save_named_profile(save_name))
+        {
+            gcmd.m_respond_info("Unable to save mesh profile [" + save_name + "]", true);
+            return;
+        }
+        m_bedmesh->set_active_mesh_profile(save_name);
+        gcmd.m_respond_info("Saved mesh profile [" + save_name + "]", true);
+        return;
+    }
+    if (remove_name != "")
+    {
+        if (!remove_named_profile(remove_name))
+        {
+            gcmd.m_respond_info("No mesh profile named [" + remove_name + "]", true);
+            return;
+        }
+        gcmd.m_respond_info("Removed mesh profile [" + remove_name + "]", true);
+        return;
+    }
+    gcmd.m_respond_info("Invalid BED_MESH_PROFILE syntax. Use LOAD=, SAVE=, or REMOVE=", true);
 }

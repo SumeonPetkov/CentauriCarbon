@@ -4,12 +4,35 @@
 #include "my_string.h"
 #include "print_stats.h"
 #include "Define_config_path.h"
+#include <cctype>
 #define LOG_TAG "sdcard"
 #undef LOG_LEVEL
 #define LOG_LEVEL LOG_INFO
 #include "log.h"
 #include "hl_common.h"
 // VALID_GCODE_EXTS = ["gcode", "g", "gco"]
+
+#define PROFILE_PREFIX_SUFFIX_NAME "default"
+#define ACTIVE_MESH_PROFILE_OPTION "active_mesh_profile"
+
+static std::string normalize_mesh_profile_name(const std::string &name)
+{
+    std::string normalized;
+    normalized.reserve(name.size());
+    for (char c : name)
+    {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (isalnum(uc) || c == '_')
+        {
+            normalized.push_back((char)tolower(uc));
+        }
+        else if (c == '-' || c == ' ')
+        {
+            normalized.push_back('_');
+        }
+    }
+    return normalized;
+}
 
 VirtualSD::VirtualSD(std::string section_name)
 {
@@ -321,6 +344,47 @@ void VirtualSD::cmd_SDCARD_PRINT_FILE(GCodeCommand &gcmd)
     //     filename = filename.substr(1);
     // }
     _load_file(gcmd, filename, true);
+    if (Printer::GetInstance()->m_bed_mesh == nullptr || Printer::GetInstance()->m_bed_mesh->m_pmgr == nullptr)
+    {
+        LOG_E("Print aborted: bed mesh subsystem is unavailable\n");
+        gcmd.m_respond_info("Print aborted: bed mesh subsystem is unavailable", true);
+        _reset_file();
+        return;
+    }
+    std::string explicit_mesh = gcmd.get_string("MESH", "");
+    std::string normalized_explicit_mesh = normalize_mesh_profile_name(explicit_mesh);
+    std::string active_mesh = normalize_mesh_profile_name(Printer::GetInstance()->m_pconfig->GetString("bed_mesh", ACTIVE_MESH_PROFILE_OPTION, ""));
+    std::string selected_mesh = "";
+    std::string selected_source = "";
+    bool mesh_loaded = false;
+
+    if (normalized_explicit_mesh != "")
+    {
+        selected_mesh = normalized_explicit_mesh;
+        selected_source = "explicit";
+        mesh_loaded = Printer::GetInstance()->m_bed_mesh->m_pmgr->load_profile_by_name(selected_mesh);
+    }
+    else if (active_mesh != "")
+    {
+        selected_mesh = active_mesh;
+        selected_source = "active";
+        mesh_loaded = Printer::GetInstance()->m_bed_mesh->m_pmgr->load_profile_by_name(selected_mesh);
+    }
+    else
+    {
+        selected_mesh = PROFILE_PREFIX_SUFFIX_NAME;
+        selected_source = "fallback";
+        mesh_loaded = Printer::GetInstance()->m_bed_mesh->m_pmgr->load_profile(PROFILE_PREFIX_SUFFIX_NAME);
+    }
+    if (!mesh_loaded)
+    {
+        LOG_E("Unable to resolve bed mesh profile from %s source (%s)\n", selected_source.c_str(), selected_mesh.c_str());
+        gcmd.m_respond_info("Print aborted: missing bed mesh profile [" + selected_mesh + "] from " + selected_source + " source", true);
+        _reset_file();
+        return;
+    }
+    Printer::GetInstance()->m_bed_mesh->set_active_mesh_profile(selected_mesh);
+    LOG_I("Using bed mesh profile [%s] from %s source\n", selected_mesh.c_str(), selected_source.c_str());
 
     if (Printer::GetInstance()->m_break_save != nullptr)
     {
