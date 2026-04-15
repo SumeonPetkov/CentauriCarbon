@@ -117,6 +117,10 @@ public:
     void cmd_BED_MESH_CLEAR(GCodeCommand &gcmd);
     void cmd_BED_MESH_OFFSET(GCodeCommand &gcmd);
     void cmd_BED_MESH_APPLICATIONS(GCodeCommand &gcmd);
+    void cmd_SET_ACTIVE_MESH(GCodeCommand &gcmd);
+    void cmd_CALIBRATE_BED_SURFACE(GCodeCommand &gcmd);
+    std::string get_active_mesh_profile();
+    void set_active_mesh_profile(const std::string &profile_name);
 
 public:
     double m_FADE_DISABLE;
@@ -230,7 +234,11 @@ public:
     void initialize();
     std::string get_current_profile();
     void save_profile(std::string prof_name);
-    void load_profile(std::string prof_name);
+    bool load_profile(std::string prof_name);
+    bool save_named_profile(std::string prof_name);
+    bool load_named_profile(std::string prof_name);
+    bool load_profile_by_name(std::string prof_name);
+    bool remove_named_profile(std::string prof_name);
     void remove_profile(std::string prof_name);
     void cmd_BED_MESH_PROFILE(GCodeCommand &gcmd);
     void _check_incompatible_profiles();

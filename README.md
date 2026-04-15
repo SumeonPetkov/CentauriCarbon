@@ -79,3 +79,47 @@ The DSP and MCU together form the system's real-time control core, responsible f
 3. Firmware resolves effective calibration (default or temp-specific).
 4. Firmware applies calibration and records active selection.
 5. Print starts; active surface/calibration is queryable via API and visible in UI.
+
+## Implemented Multi-Mesh Workflow (production path)
+
+This repository now includes a real firmware-side mesh workflow using Klipper-compatible commands:
+
+- `BED_MESH_PROFILE SAVE=<name>|LOAD=<name>|REMOVE=<name>`
+- `SET_ACTIVE_MESH MESH=<name>`
+- `CALIBRATE_BED_SURFACE BED=<bed> SURFACE=<surface> TEMP=<temp> [SOAK=<sec>] [HOME=1] [PROFILE=<name>]`
+
+### Deterministic profile names
+
+`CALIBRATE_BED_SURFACE` uses deterministic naming:
+
+`<bed>_<surface>_<temp>`
+
+Examples:
+
+- `orig_smooth_60`
+- `orig_textured_60`
+- `aftermarket_smooth_70`
+
+Names are normalized to lowercase `a-z`, `0-9`, and `_`.
+
+### Print-start mesh precedence (local + remote)
+
+`SDCARD_PRINT_FILE` now resolves mesh at print start in this order:
+
+1. explicit `MESH=<name>` parameter on `SDCARD_PRINT_FILE`
+2. active mesh stored in `[bed_mesh] active_mesh_profile`
+3. fallback legacy profile (`default`) for the currently selected platform
+
+If the selected/fallback profile does not exist, print start is aborted with an error.
+
+### Practical ElegooSlicer usage
+
+If your remote start path can pass `MESH` to `SDCARD_PRINT_FILE`, use:
+
+- `SDCARD_PRINT_FILE FILESLICE=<...> FILENAME="<...>" MESH=orig_smooth_60`
+
+If it cannot, use start G-code (or preset macros) to set active profile before print:
+
+- `SET_ACTIVE_MESH MESH=orig_smooth_60`
+
+Then start print normally; print-start fallback will use the active profile.
