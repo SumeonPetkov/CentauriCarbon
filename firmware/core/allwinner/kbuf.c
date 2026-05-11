@@ -305,7 +305,7 @@ int kbuf_use_cur_buf(struct user_wapper_buf_data_t *data)
 	data->buf_data.len = 4 * 4096;
 	data->buf_data.type = KBUF_TYPE_NONCACHE;
 
-	if (kbuf_get_buffer(&data))
+	if (kbuf_get_buffer(data))
 	{
 		printf("<%s:%d>failed\n", __func__, __LINE__);
 		return -1;
@@ -380,24 +380,27 @@ int init_dsp_kbuf()
 	// printf("init_dsp_kbuf ok \n");
 	return 0;
 }
-void reinit_dsp_kbuf()
+int reinit_dsp_kbuf()
 {
+    return 0;
 }
-void deinit_dsp_kbuf()
+int deinit_dsp_kbuf()
 {
 #if 0 // have bug
 	kbuf_free_buffer(&data);
 #endif
+    return 0;
 }
 int read_dsp_kbuf(uint8_t *buf)
 {
-	sharespace_read_dsp(buf);
+	return sharespace_read_dsp(buf);
 }
 void set_read_dsp_kbuf_pos(uint32_t read_addr)
 {
 }
-uint16_t write_dsp_kbuf(uint8_t *cmd, int len) //-6-send-g-g-2022-06-16
+int write_dsp_kbuf(uint8_t *cmd, int len) //-6-send-g-g-2022-06-16
 {
+    return 0;
 }
 
 struct DspMemOps R528_Dsp_kbuf_Ops =

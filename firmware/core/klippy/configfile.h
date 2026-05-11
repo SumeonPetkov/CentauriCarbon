@@ -6,6 +6,7 @@
 #include <string.h>
 #include <float.h>
 #include <vector>
+#include <cstdint>
 #include "Define_config_path.h"
 // #include "debug.h"
 // #include "../partslice_serial_v/printer/printer_para.h"

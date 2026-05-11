@@ -7,6 +7,7 @@
 #include <sstream>
 #include <map>
 #include <mutex>
+#include <functional>
 #include "msgproto.h"
 #include <condition_variable>
 

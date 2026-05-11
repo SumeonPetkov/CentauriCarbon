@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <map>
 #include <stdlib.h>
+#include <cstdint>
 #define MESSAGE_HEADER_SIZE 2
 
 struct Msg

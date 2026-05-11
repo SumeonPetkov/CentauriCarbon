@@ -8,6 +8,7 @@
 #include <cmath>
 #include <numeric>
 #include <algorithm>
+#include <vector>
 
 #include "probe.h"
 #include <functional>
@@ -16,6 +17,10 @@ class BedMeshCalibrate;
 class ZMesh;
 class MoveSplitter;
 class ProfileManager;
+struct ProfileData
+{
+    std::vector<double> points;
+};
 struct orig_config
 {
     double radius;
@@ -225,6 +230,7 @@ public:
     std::string m_name;
     int m_version;
     ZMesh *m_z_mesh;
+    ProfileData m_profiles;
 
 public:
     void initialize();

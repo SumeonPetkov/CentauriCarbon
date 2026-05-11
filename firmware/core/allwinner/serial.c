@@ -30,7 +30,7 @@
 #define STATS_SUMSQ_BASE_USB401 256
 
 extern struct DspMemOps smp_Uart_Ops;
-void init_Uart()
+int init_Uart()
 {
     smp_Uart_Ops.fd_write = -1;
     smp_Uart_Ops.receive_window = RECEIVE_WINDOW_USB401;
@@ -40,9 +40,11 @@ void init_Uart()
     smp_Uart_Ops.pwm_max = PWM_MAX_USB401;
     smp_Uart_Ops.adc_max = ADC_MAX_USB401;
     smp_Uart_Ops.stats_sumsq_base = STATS_SUMSQ_BASE_USB401;
+    return 0;
 }
-void re_init_Uart()
+int re_init_Uart()
 {
+    return 0;
 }
 
 struct DspMemOps smp_Uart_Ops =

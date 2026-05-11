@@ -90,7 +90,7 @@ int set_arm_ops_addr(char * arm_write_addr,char *dsp_write_addr );
 void sharespace_munmap();
 int sharespace_wait_dsp_init(   );
 int sharespace_read_dsp(uint8_t* buf);
-uint16_t DSP_mem_write(uint8_t* cmd, int len);
+int DSP_mem_write(uint8_t* cmd, int len);
 int DSP_mem_read( uint8_t* buf) ;       //
 void set_DSP_mem_read_pos(uint32_t read_addr);
 void set_arm_mem_sync(  void *fun_sync);

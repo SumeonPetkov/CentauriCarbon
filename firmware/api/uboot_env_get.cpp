@@ -89,6 +89,7 @@ int get_image_selector(char *cmd_str) //
 	// }
 	free(envval);
 	free(swu_version);
+	return 0;
 }
 
 int get_update_status() //
@@ -99,6 +100,7 @@ int get_update_status() //
 		GAM_DEBUG_printf("get_update_status: bootloader_env_get recovery_status strlen:%d: %s\n", strlen(recovery_status), (recovery_status == NULL) ? "?" : recovery_status);
 	}
 	free(recovery_status);
+	return 0;
 }
 
 int bootloader_env_set(const char *name, const char *value)

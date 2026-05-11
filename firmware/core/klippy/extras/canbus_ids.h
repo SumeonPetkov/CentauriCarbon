@@ -2,6 +2,7 @@
 #define CANBUS_IDS_H
 #include "string"
 #include "map"
+#include <cstdint>
 
 class PrinterCANBus
 {

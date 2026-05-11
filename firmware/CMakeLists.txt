@@ -53,11 +53,7 @@ aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/hl/utils SRC_LIST)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/core/aw/ SRC_LIST)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/core/aw/librpbuf/ SRC_LIST)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/core/aw/librpmsg/ SRC_LIST)
-aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/app/e100_lite SRC_LIST)
-# aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/app/e100 SRC_LIST)
-# aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/app/kp3s SRC_LIST)
-# aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/app/reference SRC_LIST)
-# aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/app/reference-e100 SRC_LIST)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/app/e100 SRC_LIST)
 
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/service SRC_LIST)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/gui SRC_LIST)
@@ -84,11 +80,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/core/klippy/kinematics
     ${CMAKE_CURRENT_SOURCE_DIR}/devices
     ${CMAKE_CURRENT_SOURCE_DIR}/utils
-    ${CMAKE_CURRENT_SOURCE_DIR}/app/e100_lite
-    # ${CMAKE_CURRENT_SOURCE_DIR}/app/e100
-    # ${CMAKE_CURRENT_SOURCE_DIR}/app/kp3s
-    # ${CMAKE_CURRENT_SOURCE_DIR}/app/reference
-    # ${CMAKE_CURRENT_SOURCE_DIR}/app/reference-e100
+    ${CMAKE_CURRENT_SOURCE_DIR}/app/e100
 
 
     ${CMAKE_CURRENT_SOURCE_DIR}/gui/
@@ -155,7 +147,6 @@ link_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/x264
 	${CMAKE_CURRENT_SOURCE_DIR}/lib/alsa
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/ffmpeg
-
 )
 
 add_executable(${CMAKE_PROJECT_NAME} ${SRC_LIST} ${LVGL_SOURCES})   

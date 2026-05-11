@@ -179,7 +179,7 @@ static void save_pa_val(void *arg = NULL) //-保存流量校准数据--
     double *val = (double *)arg;
     Printer::GetInstance()->m_pconfig->SetDouble("extruder", "pressure_advance", *val);
     char cmd[MANUAL_COMMAND_MAX_LENGTH];
-    sprintf(cmd, "SET_PRESSURE_ADVANCE ADVANCE=%.2f", val);
+    sprintf(cmd, "SET_PRESSURE_ADVANCE ADVANCE=%.2f", *val);
     manual_control_sq.push(cmd);
     Printer::GetInstance()->manual_control_signal();
 

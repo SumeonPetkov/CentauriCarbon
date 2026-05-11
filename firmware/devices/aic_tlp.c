@@ -1,3 +1,4 @@
+#define _XOPEN_SOURCE 500
 #include "config.h"
 
 #if CONFIG_SUPPORT_TLP
@@ -773,11 +774,11 @@ static void mp4_export_handle(hl_tpool_thread_t thread, void *args)
                 uint8_t failure_count = 0;
 
                 // 使用nftw遍历目录，不设置同时打开文件描述符的最大数量
-                int result = nftw(file_name, count_callback, 0);
+                int result = nftw(file_name, count_callback, 0, 0);
 
                 if (result == -1) {
                     LOG_E("nftw");
-                    return 1;
+                    break;
                 }
                 else
                 {
@@ -826,7 +827,7 @@ static void mp4_export_handle(hl_tpool_thread_t thread, void *args)
                     if (buffer == NULL) {
                         LOG_E("Memory allocation failed");
                         fclose(fp);
-                        return EXIT_FAILURE;
+                        break;
                     }
 
                     // 读取文件内容
@@ -1582,7 +1583,7 @@ static int tlp_mjpeg_to_yuyv422(uint8_t *i_data, uint32_t i_size, uint8_t **o_da
 
         uint8_t *output_planes[3] = {output_data, NULL, NULL};
         int output_strides[3] = {codec_ctx->width * 2, 0, 0};
-        sws_scale(sws_ctx, frame->data, frame->linesize, 0, codec_ctx->height, output_planes, output_strides);
+        sws_scale(sws_ctx, (const uint8_t *const *)frame->data, frame->linesize, 0, codec_ctx->height, output_planes, output_strides);
 
         sws_freeContext(sws_ctx);
     }

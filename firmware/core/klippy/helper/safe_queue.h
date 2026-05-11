@@ -4,6 +4,7 @@
 #pragma once
 #include <queue>
 #include <pthread.h>
+#include <cstdint>
 
 using namespace std;
 

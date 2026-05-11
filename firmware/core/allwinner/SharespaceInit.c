@@ -38,6 +38,7 @@ int GAM_DEBUG_printf_time()
     struct timeval tNow;
     gettimeofday(&tNow, NULL); // get_monotonic
     printf("[%d %d]:", tNow.tv_sec, tNow.tv_usec);
+    return 0;
 }
 
 size_t virtual_to_physical(size_t addr)
@@ -357,7 +358,7 @@ int wait_dsp_set_init() //
     }
 }
 
-uint16_t DSP_mem_write(uint8_t *cmd, int len) //
+int DSP_mem_write(uint8_t *cmd, int len) //
 {
     int ret = 0;
     uint32_t free_size = 0;

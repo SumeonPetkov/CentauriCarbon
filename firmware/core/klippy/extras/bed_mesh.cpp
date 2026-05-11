@@ -1899,38 +1899,37 @@ ProfileManager::ProfileManager(std::string section_name, BedMesh *bedmesh)
     m_bedmesh = bedmesh;
     m_current_profile = "";
     m_z_mesh = nullptr;
-    load_profile(PROFILE_PREFIX_SUFFIX_NAME); // 里面会判断是否有default，没有就不加载
-    // m_profiles = {0};
-    // m_current_profile = "";
-    // m_stored_profs = Printer::GetInstance()->m_pconfig->get_prefix_sections(section_name);
-    // for (const std::string &str : m_stored_profs)
-    // {
-    //     std::cout << " m_stored_profs " << str << " ";
-    // }
-    // std::cout << std::endl;
-    // m_version = Printer::GetInstance()->m_pconfig->GetInt(section_name, "version", 0);
-    // if (m_version != PROFILE_VERSION)
-    // {
-    //     printf("bed_mesh: Profile [%s] not compatible with this version\n"
-    //            "of bed_mesh.  Profile Version: %d Current Version: %d ",
-    //            (section_name.c_str(), m_version, PROFILE_VERSION));
-    //     m_incompatible_profiles.push_back(section_name);
-    //     return;
-    // }
-    // std::vector<string> origin_str = Printer::GetInstance()->m_pconfig->get_prefix_options(section_name, "points");
-    // strip(origin_str[0]);
-    // std::istringstream iss(origin_str[0]);
-    // std::string token;
-    // while (getline(iss, token, ','))
-    // {
-    //     m_profiles.points.push_back(atof(token.c_str()));
-    // }
-    // for (int i = 0; i < m_profiles.points.size(); i++)
-    // {
-    //     printf("read_points %f\n", m_profiles.points[i]);
-    // }
-    // m_cmd_BED_MESH_PROFILE_help = "Bed Mesh Persistent Storage management";
-    // Printer::GetInstance()->m_gcode->register_command("BED_MESH_PROFILE", std::bind(&ProfileManager::cmd_BED_MESH_PROFILE, this, std::placeholders::_1), false, m_cmd_BED_MESH_PROFILE_help);
+    load_profile(PROFILE_PREFIX_SUFFIX_NAME);  // 里面会判断是否有default，没有就不加载
+    m_profiles.points.clear();
+    m_stored_profs = Printer::GetInstance()->m_pconfig->get_prefix_sections(section_name);
+    for (const std::string &str : m_stored_profs)
+    {
+        std::cout << " m_stored_profs " << str << " ";
+    }
+    std::cout << std::endl;
+    m_version = Printer::GetInstance()->m_pconfig->GetInt(section_name, "version", 0);
+    if (m_version != PROFILE_VERSION)
+    {
+        printf("bed_mesh: Profile [%s] not compatible with this version\n"
+               "of bed_mesh.  Profile Version: %d Current Version: %d ",
+             section_name.c_str(), m_version, PROFILE_VERSION);
+        m_incompatible_profiles.push_back(section_name);
+        return;
+    }
+    std::vector<string> origin_str = Printer::GetInstance()->m_pconfig->get_prefix_options(section_name, "points");
+    strip(origin_str[0]);
+    std::istringstream iss(origin_str[0]);
+    std::string token;
+    while (getline(iss, token, ','))
+    {
+        m_profiles.points.push_back(atof(token.c_str()));
+    }
+    for (int i = 0; i < m_profiles.points.size(); i++)
+    {
+        printf("read_points %f\n", m_profiles.points[i]);
+    }
+    m_cmd_BED_MESH_PROFILE_help = "Bed Mesh Persistent Storage management";
+    Printer::GetInstance()->m_gcode->register_command("BED_MESH_PROFILE", std::bind(&ProfileManager::cmd_BED_MESH_PROFILE, this, std::placeholders::_1), false, m_cmd_BED_MESH_PROFILE_help);
 }
 
 ProfileManager::~ProfileManager()
@@ -2114,35 +2113,66 @@ void ProfileManager::load_profile(std::string prof_name)
 
 void ProfileManager::remove_profile(std::string prof_name)
 {
-    // if prof_name in m_profiles:
-    //     configfile = m_printer.lookup_object('configfile')
-    //     configfile.remove_section('bed_mesh ' + prof_name)
-    //     del m_profiles[prof_name]
-    //     m_gcode.respond_info(
-    //         "Profile [%s] removed from storage for this session.\n"
-    //         "The SAVE_CONFIG command will update the printer\n"
-    //         "configuration and restart the printer" % (prof_name))
-    // else:
-    //     m_gcode.respond_info(
-    //         "No profile named [%s] to remove" % (prof_name))
+    if (prof_name == PROFILE_PREFIX_SUFFIX_NAME)
+    {
+        Printer::GetInstance()->m_gcode->respond_info("Profile 'default' is reserved and cannot be removed.");
+        return;
+    }
+
+    std::string cfg_name = PROFILE_PREFIX_NAME;
+    cfg_name += "_";
+    cfg_name += m_bedmesh->m_platform_material;
+    cfg_name += "_";
+    if (m_bedmesh->m_current_mesh_index)
+    {
+        cfg_name += to_string(m_bedmesh->m_current_mesh_index);
+    }
+    else
+    {
+        cfg_name += prof_name;
+    }
+
+    if (!Printer::GetInstance()->m_pconfig->IsExistSection(cfg_name))
+    {
+        Printer::GetInstance()->m_gcode->respond_info("No profile named [" + prof_name + "] to remove");
+        return;
+    }
+
+    Printer::GetInstance()->m_pconfig->DeleteSection(cfg_name);
+    m_stored_profs.erase(std::remove(m_stored_profs.begin(), m_stored_profs.end(), prof_name), m_stored_profs.end());
+    Printer::GetInstance()->m_gcode->respond_info(
+        "Profile [" + prof_name + "] removed from storage for this session.\n"
+        "The SAVE_CONFIG command will update the printer\n"
+        "configuration and restart the printer");
 }
 
 void ProfileManager::cmd_BED_MESH_PROFILE(GCodeCommand &gcmd)
 {
-    // options = collections.OrderedDict({
-    //     'LOAD': m_load_profile,
-    //     'SAVE': m_save_profile,
-    //     'REMOVE': m_remove_profile
-    // })
-    // for key in options:
-    //     name = gcmd.get(key, None)
-    //     if name is not None:
-    //         if name == "default" and key == 'SAVE':
-    //             gcmd.respond_info(
-    //                 "Profile 'default' is reserved, please choose"
-    //                 " another profile name.")
-    //         else:
-    //             options[key](name)
-    //         return
-    // gcmd.respond_info("Invalid syntax '%s'" % (gcmd.get_commandline(),))
+    std::string load_name = gcmd.get_string("LOAD", "");
+    std::string save_name = gcmd.get_string("SAVE", "");
+    std::string remove_name = gcmd.get_string("REMOVE", "");
+
+    if (!load_name.empty())
+    {
+        load_profile(load_name);
+        return;
+    }
+    if (!save_name.empty())
+    {
+        if (save_name == PROFILE_PREFIX_SUFFIX_NAME)
+        {
+            Printer::GetInstance()->m_gcode->respond_info(
+                "Profile 'default' is reserved, please choose another profile name.");
+            return;
+        }
+        save_profile(save_name);
+        return;
+    }
+    if (!remove_name.empty())
+    {
+        remove_profile(remove_name);
+        return;
+    }
+
+    Printer::GetInstance()->m_gcode->respond_info("Invalid syntax '" + gcmd.get_commandline() + "'");
 }

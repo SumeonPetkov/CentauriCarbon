@@ -73,11 +73,12 @@ int DSP_mem_Init( )     //
     return -1;
 }
 
-int DSP_mem_DeInit( )
+int DSP_mem_DeInit()
 {
     SunxiMemPfree(pDSP_Memops,(void *)pVirArmBuf);
     if(pDSP_Memops )
     SunxiMemClose(pDSP_Memops);
+    return 0;
 }
 
 struct DspMemOps R528_Dsp_Mem_Ops =

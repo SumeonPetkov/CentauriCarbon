@@ -31,6 +31,7 @@ int beep_on(bool argc)
 
     int resB = system(cmd_str);
     // std::cout << "system run:"<< cmd_str << " resB: " << resB << std::endl;
+    return resB;
 }
 int beepinit()
 {
@@ -63,6 +64,7 @@ int beepinit()
     // 蜂鸣器
     pthread_t beep_process_tid;
     pthread_create(&beep_process_tid, NULL, beep_process_task, NULL);
+    return 0;
 }
 
 void *beep_process_task(void *arg)

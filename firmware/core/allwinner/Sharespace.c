@@ -317,7 +317,7 @@ uint32_t share_space_set_read_idle_state()
 
 
 
-uint16_t write_into_arm_write_space( uint8_t* cmd, int len)   //-6-send-g-g-2022-06-16
+int write_into_arm_write_space(uint8_t* cmd, int len)   //-6-send-g-g-2022-06-16
 {
     int ret = 0;
 
@@ -603,7 +603,7 @@ void set_read_dsp_space_pos(uint32_t read_addr)
 
 
 
-void munmap_arm_dsp()
+int munmap_arm_dsp()
 {
     int ret = 0;
     sharespace_munmap();
@@ -614,6 +614,7 @@ void munmap_arm_dsp()
         printf("state_p fail!\n");
     }
  #endif
+    return 0;
 }
 void msync_arm_dsp()
 {

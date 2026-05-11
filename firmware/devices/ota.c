@@ -21,6 +21,8 @@
 #include "ai_camera.h"
 #include "hl_assert.h"
 #include "hl_camera.h"
+#include <time.h>
+#include <sys/time.h>
 
 #define ENVIRONMENT_DEVELOPMENT 0 // 开发环境
 #define ENVIRONMENT_TESTING 1     // 测试环境

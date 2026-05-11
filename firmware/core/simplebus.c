@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define LOG_TAG "simplebus"
 #undef LOG_LEVEL

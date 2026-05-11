@@ -11,7 +11,7 @@
 static int fd_uart;
 
 extern struct DspMemOps R528_Dsp_Uart_Ops ;
-int init_dsp_uart( )
+int init_dsp_uart()
 {
    int ret = 0;
    printf("init_dsp_uart\n");
@@ -100,17 +100,18 @@ int init_dsp_uart( )
     R528_Dsp_Uart_Ops.fd_read = fd;
    R528_Dsp_Uart_Ops.write_lenth = 0;
     R528_Dsp_Uart_Ops.read_lenth = 0;
-    printf("init_dsp_uart OK\n");   
-
+     printf("init_dsp_uart OK\n");
+     return 0;
 }
 
-void deinit_dsp_uart()
+int deinit_dsp_uart()
 {
+     return 0;
 }
 
 int read_dsp_uart(uint8_t* buf)
 {
-     sharespace_read_dsp(buf);
+      return sharespace_read_dsp(buf);
 }
 
 void set_read_dsp_uart_pos(uint32_t read_addr)
@@ -118,9 +119,9 @@ void set_read_dsp_uart_pos(uint32_t read_addr)
      // set_read_dsp_space_pos();
 }
 
-uint16_t write_dsp_uart(uint8_t* cmd, int len)   //-6-send-g-g-2022-06-16
+int write_dsp_uart(uint8_t* cmd, int len)   //-6-send-g-g-2022-06-16
 {
-     write(fd_uart, (void *)cmd,len);
+     return write(fd_uart, (void *)cmd, len);
 }
 
 struct DspMemOps R528_Dsp_Uart_Ops =

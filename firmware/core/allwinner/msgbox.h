@@ -51,4 +51,5 @@ extern int input_wait_read;
 int msgbox_rpmsg_init();
 void msgbox_send_signal(uint32_t read_write , uint16_t value);
 uint32_t msgbox_read_signal(uint32_t read);
+void msgbox_poll_read();
 #endif
