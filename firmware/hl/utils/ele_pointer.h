@@ -5,8 +5,8 @@
  * @date 2024-03-26
  * 
  */
-#ifndef _CBD_POINTER_H
-#define _CBD_POINTER_H
+#ifndef _ELE_POINTER_H
+#define _ELE_POINTER_H
 
 #ifdef __cplusplus
 extern "C" {
