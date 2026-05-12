@@ -184,6 +184,7 @@ public:
     struct mesh_config m_mesh_config={0};
     ZMesh *m_z_mesh=nullptr;
     std::string m_section_name;
+    std::string m_pending_profile_name;
 };
 
 class MoveSplitter
@@ -235,8 +236,8 @@ public:
 public:
     void initialize();
     std::string get_current_profile();
-    void save_profile(std::string prof_name);
-    void load_profile(std::string prof_name);
+    void save_profile(std::string prof_name, bool force_name = false);
+    void load_profile(std::string prof_name, bool force_name = false);
     void remove_profile(std::string prof_name);
     void cmd_BED_MESH_PROFILE(GCodeCommand &gcmd);
     void _check_incompatible_profiles();

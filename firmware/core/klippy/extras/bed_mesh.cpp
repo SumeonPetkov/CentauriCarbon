@@ -79,6 +79,46 @@ std::vector<double> parse_pair(std::string section_name, std::string option, std
     return values;
 }
 
+static std::vector<int> parse_cmd_int_pair(GCodeCommand &gcmd, std::string option, bool check = true, int minval = INT32_MIN, int maxval = INT32_MAX)
+{
+    std::string cmd_params = gcmd.get_string(option, "");
+    std::vector<int> values;
+    strip(cmd_params);
+    std::istringstream iss(cmd_params);
+    std::string token_str;
+    while (getline(iss, token_str, ','))
+    {
+        strip(token_str);
+        if (!token_str.empty())
+        {
+            values.push_back(atoi(token_str.c_str()));
+        }
+    }
+    if (check && values.size() != 2)
+    {
+        std::cout << "bed_mesh: malformed value" << std::endl;
+    }
+    else if (values.size() == 1)
+    {
+        values.push_back(values[0]);
+    }
+    if (minval != INT32_MIN && values.size() >= 2)
+    {
+        if (values[0] < minval || values[1] < minval)
+        {
+            std::cout << "bed_mesh must have a minimum" << std::endl;
+        }
+    }
+    if (maxval != INT32_MAX && values.size() >= 2)
+    {
+        if (values[0] > maxval || values[1] > maxval)
+        {
+            std::cout << "bed_mesh must have a maximum" << std::endl;
+        }
+    }
+    return values;
+}
+
 // retreive commma separated pair from config
 BedMesh::BedMesh(std::string section_name)
 {
@@ -471,6 +511,7 @@ BedMeshCalibrate::BedMeshCalibrate(std::string section_name, BedMesh *bedmesh)
     m_orig_config.rri = m_relative_reference_index;
     m_bedmesh = bedmesh;
     m_section_name = section_name;
+    m_pending_profile_name = "";
     _init_mesh_config(m_section_name);
     _generate_points();
     m_orig_points = m_points;
@@ -914,10 +955,13 @@ void BedMeshCalibrate::update_config(GCodeCommand &gcmd)
         }
         if (params.find("PROBE_COUNT") != params.end())
         {
-            // x_cnt, y_cnt = parse_pair(gcmd, ("PROBE_COUNT",), check=False, cast=int, minval=3)  //---??---bed_mesh
-            // m_mesh_config.x_count = x_cnt;
-            // m_mesh_config.y_count = y_cnt;
-            need_cfg_update = true;
+            std::vector<int> cnt = parse_cmd_int_pair(gcmd, "PROBE_COUNT", false, 3);
+            if (cnt.size() >= 2)
+            {
+                m_mesh_config.x_count = cnt[0];
+                m_mesh_config.y_count = cnt[1];
+                need_cfg_update = true;
+            }
         }
     }
     if (params.find("ALGORITHM") != params.end())
@@ -968,6 +1012,11 @@ std::vector<std::vector<double>> BedMeshCalibrate::_get_adjusted_points()
 void BedMeshCalibrate::cmd_BED_MESH_CALIBRATE(GCodeCommand &gcmd)
 {   
     Printer::GetInstance()->m_gcode_io->single_command("BED_MESH_SET_INDEX INDEX=0");
+    m_pending_profile_name = gcmd.get_string("PROFILE", "");
+    if (m_pending_profile_name.empty())
+    {
+        m_pending_profile_name = gcmd.get_string("SAVE", "");
+    }
     if (gcmd.get_string("METHOD", "automatic") == "fast") { 
         ZMesh *z_mesh = m_bedmesh->get_mesh();
         if (z_mesh != nullptr) {
@@ -1187,7 +1236,11 @@ std::string BedMeshCalibrate::probe_finalize(std::vector<double> offsets, std::v
     m_z_mesh->build_mesh(probed_matrix);
     m_bedmesh->set_mesh(m_z_mesh);
     printf("Bed Mesh Leveling Complete\n");
-    if (m_bedmesh->m_current_mesh_index)
+    if (!m_pending_profile_name.empty())
+    {
+        m_bedmesh->m_pmgr->save_profile(m_pending_profile_name, true);
+    }
+    else if (m_bedmesh->m_current_mesh_index)
     {
         m_bedmesh->m_pmgr->save_profile(to_string(m_bedmesh->m_current_mesh_index));
     }
@@ -1195,6 +1248,7 @@ std::string BedMeshCalibrate::probe_finalize(std::vector<double> offsets, std::v
     {
         m_bedmesh->m_pmgr->save_profile(PROFILE_PREFIX_SUFFIX_NAME);
     }
+    m_pending_profile_name.clear();
     return "";
 }
 
@@ -1961,7 +2015,7 @@ void ProfileManager::_check_incompatible_profiles()
     }
 }
 
-void ProfileManager::save_profile(std::string prof_name)
+void ProfileManager::save_profile(std::string prof_name, bool force_name)
 {
     ZMesh *z_mesh = m_bedmesh->get_mesh();
     if (!z_mesh)
@@ -1975,7 +2029,7 @@ void ProfileManager::save_profile(std::string prof_name)
     cfg_name += "_";
     cfg_name += m_bedmesh->m_platform_material;
     cfg_name += "_";
-    if (m_bedmesh->m_current_mesh_index)
+    if (!force_name && m_bedmesh->m_current_mesh_index)
     {
         cfg_name += to_string(m_bedmesh->m_current_mesh_index);
     }
@@ -2043,13 +2097,13 @@ void ProfileManager::save_profile(std::string prof_name)
            prof_name.c_str());
 }
 
-void ProfileManager::load_profile(std::string prof_name)
+void ProfileManager::load_profile(std::string prof_name, bool force_name)
 {
     std::string cfg_name = PROFILE_PREFIX_NAME;
     cfg_name += "_";
     cfg_name += m_bedmesh->m_platform_material;
     cfg_name += "_";
-    if (m_bedmesh->m_current_mesh_index)
+    if (!force_name && m_bedmesh->m_current_mesh_index)
     {
         cfg_name += to_string(m_bedmesh->m_current_mesh_index);
     }
@@ -2154,7 +2208,7 @@ void ProfileManager::cmd_BED_MESH_PROFILE(GCodeCommand &gcmd)
 
     if (!load_name.empty())
     {
-        load_profile(load_name);
+        load_profile(load_name, true);
         return;
     }
     if (!save_name.empty())
@@ -2165,7 +2219,7 @@ void ProfileManager::cmd_BED_MESH_PROFILE(GCodeCommand &gcmd)
                 "Profile 'default' is reserved, please choose another profile name.");
             return;
         }
-        save_profile(save_name);
+        save_profile(save_name, true);
         return;
     }
     if (!remove_name.empty())

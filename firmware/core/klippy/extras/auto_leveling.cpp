@@ -531,6 +531,12 @@ void AutoLeveling::wipe_nozzle()
 
 void AutoLeveling::cmd_G29(GCodeCommand &gcmd)
 {
+    std::string profile_name = gcmd.get_string("PROFILE", "");
+    if (profile_name.empty())
+    {
+        profile_name = gcmd.get_string("SAVE", "");
+    }
+    std::string probe_count = gcmd.get_string("PROBE_COUNT", "");
 
     auto_leveling_state_callback_call(AUTO_LEVELING_STATE_START);
     if(!enable_test_mode){
@@ -603,12 +609,28 @@ void AutoLeveling::cmd_G29(GCodeCommand &gcmd)
             std::cout << "G29 BED_MESH_CALIBRATE fast" << std::endl;
             std::map<std::string, std::string> params;
             params["METHOD"] = "fast";
+            if (!profile_name.empty())
+            {
+                params["PROFILE"] = profile_name;
+            }
+            if (!probe_count.empty())
+            {
+                params["PROBE_COUNT"] = probe_count;
+            }
             GCodeCommand bed_mesh_calibrate_cmd = Printer::GetInstance()->m_gcode->create_gcode_command("BED_MESH_CALIBRATE", "BED_MESH_CALIBRATE", params);
             Printer::GetInstance()->m_bed_mesh->m_bmc->cmd_BED_MESH_CALIBRATE(bed_mesh_calibrate_cmd);
             // Printer::GetInstance()->m_gcode_io->single_command("BED_MESH_CALIBRATE METHOD=fast"); //
         } else {
             std::cout << "G29 BED_MESH_CALIBRATE normal" << std::endl;
             std::map<std::string, std::string> params;
+            if (!profile_name.empty())
+            {
+                params["PROFILE"] = profile_name;
+            }
+            if (!probe_count.empty())
+            {
+                params["PROBE_COUNT"] = probe_count;
+            }
             GCodeCommand bed_mesh_calibrate_cmd = Printer::GetInstance()->m_gcode->create_gcode_command("BED_MESH_CALIBRATE", "BED_MESH_CALIBRATE", params);
             Printer::GetInstance()->m_bed_mesh->m_bmc->cmd_BED_MESH_CALIBRATE(bed_mesh_calibrate_cmd);
             // Printer::GetInstance()->m_gcode_io->single_command("BED_MESH_CALIBRATE "); //
