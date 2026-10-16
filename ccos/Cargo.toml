@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["crates/cc-proto", "crates/cc-transport", "crates/cc-res", "crates/cc-gui", "crates/ccos"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+cc-proto = { path = "crates/cc-proto" }
+cc-transport = { path = "crates/cc-transport" }
+cc-res = { path = "crates/cc-res" }
+cc-gui = { path = "crates/cc-gui" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

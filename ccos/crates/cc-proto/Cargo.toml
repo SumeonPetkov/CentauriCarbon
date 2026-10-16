@@ -1,0 +1,11 @@
+[package]
+name = "cc-proto"
+description = "Klipper MCU wire protocol as spoken by the Elegoo Centauri Carbon (fixed id table)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+miniz_oxide = "0.8"

@@ -1,0 +1,13 @@
+[package]
+name = "cc-gui"
+description = "Framebuffer + touch GUI toolkit for the Centauri Carbon 480x272 screen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc.workspace = true
+cc-res.workspace = true
+embedded-graphics = "0.8"
+fontdue = "0.9"
+png = "0.17"

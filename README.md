@@ -7,6 +7,11 @@ The firmware serves as the core control module, encapsulating all 3D printing co
 
 The DSP and MCU together form the system's real-time control core, responsible for managing a wide range of input/output signals and peripheral devices, such as multi-axis control of the printer, temperature monitoring and regulation of the heated bed and extruder, limit switch status detection, and fan speed control.
 
+## Reverse-engineering notes and Rust toolkit
+
+* [`docs/re/`](docs/re/README.md): how the Centauri Carbon software works: architecture, hardware/pin map, MCU protocol (fixed message ids, DSP shared-memory link), update formats, UI resource formats, G-code extensions, build notes.
+* [`ccos/`](ccos/README.md): Rust crates and tools: `ccres` (edit/preview the stock UI, pack MCU firmware) and `ccos` (on-printer host foundation with its own touchscreen UI).
+
 ## Multi-Bed Support Architecture
 
 ### Scope

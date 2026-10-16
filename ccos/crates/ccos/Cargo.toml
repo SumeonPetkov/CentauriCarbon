@@ -1,0 +1,14 @@
+[package]
+name = "ccos"
+description = "Custom host software for the Elegoo Centauri Carbon (bring-up tools, GUI, resource editor)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "ccos"
+
+[dependencies]
+cc-proto.workspace = true
+cc-transport.workspace = true
+cc-res.workspace = true
+cc-gui.workspace = true
+serde_json.workspace = true

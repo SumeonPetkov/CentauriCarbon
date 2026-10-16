@@ -1,0 +1,6 @@
+# Cross-compile for the Centauri Carbon (Allwinner R528, 2x Cortex-A7).
+# A fully static musl binary runs regardless of the stock Tina/OpenWrt libc.
+#   cargo build --release --target armv7-unknown-linux-musleabihf
+[target.armv7-unknown-linux-musleabihf]
+linker = "rust-lld"
+rustflags = ["-C", "target-cpu=cortex-a7", "-C", "link-self-contained=yes", "-C", "target-feature=+crt-static"]

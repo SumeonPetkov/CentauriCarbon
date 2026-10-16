@@ -1,0 +1,9 @@
+[package]
+name = "cc-transport"
+description = "Links to the Centauri Carbon MCUs: UART/USB-CDC serial and the R528 DSP shared-memory ring"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc.workspace = true
