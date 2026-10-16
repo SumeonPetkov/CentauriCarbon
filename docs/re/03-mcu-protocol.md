@@ -63,21 +63,36 @@ Notable Elegoo-specific messages: `config_stepper … step_pulse_ticks=%u`,
 implementation is `core/allwinner/kbuf.c` + `SharespaceInit.c` +
 `msgbox.c` (`Sharespace.c` and `DSP_mem.c` are older alternatives).
 
+### When the DSP accepts a host
+
+The DSP firmware runs `share_space_clear()` then `share_space_init()` **once,
+at DSP boot**: it fills the mailbox head with `0xA5` bytes and spins until a
+host writes ring addresses into it. After that it never looks at the mailbox
+again. Consequences:
+
+* Whoever attaches first after a DSP (re)start owns it — normally Elegoo's
+  `app` at boot.
+* A second host (e.g. `ccos` after you kill `app`) must restart the DSP
+  through remoteproc first. A mailbox head that still reads `0xA5A5A5A5` means
+  the DSP is waiting; anything else means it is attached. `ccos` checks this
+  and restarts the DSP only when needed (`--keep-dsp` disables that).
+
 ### Setup
 
 1. `open("/dev/dsp_debug")`, `ioctl(1 = CMD_READ_DEBUG_MSG, &dsp_sharespace_t)`.
    The 52-byte struct lists the physical addresses/sizes of the DSP-write,
    ARM-write and log regions defined in the DSP image's device-tree header.
-2. Set `mmap_phy_addr = arm_write_addr`, `ioctl(3 = CMD_WRITE_DEBUG_MSG)`,
-   `mmap` 4 KiB → the **mailbox page**.
+2. Set `mmap_phy_addr`/`mmap_phy_size` to the ARM-write region,
+   `ioctl(3 = CMD_WRITE_DEBUG_MSG)`, `mmap` 4 KiB → the **mailbox page**.
 3. `open("/dev/kbuf-mgr-0")`, `ioctl(0x100 = CREATE_BUF, {name "test",
-   len 16384, type NONCACHE})` → returns `minor` and physical address `pa`.
+   len 16384, type NONCACHE, pa = arm_write_addr})` (the stock host pre-sets
+   `pa`) → returns `minor` and the buffer's physical address `pa`.
    `mmap("/dev/kbuf-map-<minor>-test")`. Page 0 = ARM→DSP ring, page 1 =
-   DSP→ARM ring.
+   DSP→ARM ring. `ioctl(0x200 = DESTROY_BUF)` frees it (the stock host never
+   does — "have bug" — but OpenCentauri's tool and `ccos` do on exit).
 4. Write into the mailbox head `{read_addr: pa+4096, write_addr: pa,
    init_state: 1 (or 2 if it was already 1/2)}`. The DSP
-   (`sharespace_reinit()` in `share_space.c`) polls this and adopts the
-   addresses.
+   (`sharespace_reinit()` in `share_space.c`) adopts the addresses.
 5. Write `{12, 12, 1}` into ring page 0's head; poll ring page 1's head until
    the DSP sets `init_state == 1`.
 6. `open("/dev/rpmsg_ctrl0")`, `ioctl(RPMSG_CREATE_EPT_IOCTL = 0x4028b501,
@@ -96,33 +111,49 @@ head = { u32 read_addr, u32 write_addr, u32 init_state }  (little-endian)
 * Writer: wait until `free > len` (never fill completely), copy, update own
   head, then send a 4-byte **doorbell** on the rpmsg endpoint:
   `(write_pos << 16) | read_pos`.
-* The DSP's doorbells carry `(dsp_write_pos << 16) | dsp_read_pos`; the host
-  takes `dsp_read_pos` from the low half to compute free space, and reads new
-  data up to the DSP head's `write_addr`. Values ≥ 5000 are ignored.
-* The host's read position reaches the DSP only through the low half of the
-  host's next doorbell.
+* The DSP keeps its consumer position current in **its own page head**
+  (`read_addr`); OpenCentauri's working bridge computes free space from that,
+  and so does `ccos`. The DSP's doorbells also carry
+  `(dsp_write_pos << 16) | dsp_read_pos` and serve as the "data available"
+  wake-up; values ≥ 5000 are ignored.
+* The host reads new data up to the DSP head's `write_addr`. Its own read
+  position reaches the DSP through the low half of its next doorbell.
+* The buffer is non-cached, so no cache maintenance is needed per access (the
+  stock `kbuf_mem_sync()` is empty).
+
+### DSP log
+
+Selecting the log region (`CHOOSE_DSP_LOG_SPACE`) and mapping
+`dsp_log_size` bytes gives the DSP's `printf` output: a `u32` write offset at
+0, NUL-separated strings from offset 4, wrapping. `ccos dsp-log` follows it.
 
 ### DSP lifecycle
 
 `/sys/class/remoteproc/remoteproc0/state` accepts `start` / `stop`
-(`core/aw/aw_dsp.c`). A restart re-runs the DSP's `share_space_init()`.
+(`core/aw/aw_dsp.c`; the stock `main.cpp` has a `dsp_restart()` call commented
+out). A restart re-runs the DSP's `share_space_init()`. Where remoteproc loads
+the image from on a restart has not been verified on hardware.
 
 ## STM32 links
 
 Plain termios raw serial. Toolhead: `/dev/ttyACM0` (USB CDC; the configured
-1 000 000 baud is irrelevant over USB). Load-cell board: `/dev/ttyS4` 115200 8N1.
+1 000 000 baud is irrelevant over USB). Bed board: `/dev/ttyS4` 115200 8N1.
+After a power cycle both sit in Elegoo's bootloader until they receive a
+YMODEM upload or an `a` (see [02](02-hardware.md)).
 
 ## Talking to the MCUs yourself
 
-With the stock `app` stopped:
+With the stock `app` stopped (`ccos` refuses to touch the MCUs while it runs):
 
 ```sh
-ccos probe all          # identify, get_config, get_uptime, measure clock
-ccos console toolhead   # type raw commands, e.g. get_uptime / get_clock
-ccos temps              # configure 2 ADC channels on a fresh DSP, print bed & chamber temps
+ccos probe all              # identify, get_config, measure clock on all three
+ccos console toolhead       # type raw commands, e.g. get_uptime / get_clock
+ccos power-cycle toolhead   # reset + boot an STM32 (power pin, then 'a' to the bootloader)
+ccos dsp-log                # follow the DSP's printf output
+ccos                        # the touchscreen UI (live bed/chamber/nozzle temperatures, light)
 ```
 
 An MCU accepts `config_*` commands only until `finalize_config`. After the
-stock app has configured them, return the STM32s to a fresh state with
-`ccos power-cycle toolhead|sg` (same GPIO sequence as the stock host), and the
-DSP with a remoteproc stop/start or a reboot.
+stock app has configured them, the STM32s need a power cycle and the DSP a
+remoteproc restart before another host can configure them — `ccos` does both
+automatically.

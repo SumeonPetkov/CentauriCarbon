@@ -144,8 +144,18 @@ impl HostRings {
         }
     }
 
+    /// Take the DSP's consumer position from the head of the DSP->ARM page,
+    /// where `share_space.c` keeps it current (this is what OpenCentauri's
+    /// working `dsp-to-serial` relies on; the doorbell copy can lag).
+    pub fn refresh_dsp_read(&mut self, rx: &impl Page) {
+        let r = Head::load(rx).read_addr;
+        if (MIN_ADDR..MAX_ADDR).contains(&r) {
+            self.dsp_read = r;
+        }
+    }
+
     pub fn can_write(&self, len: usize) -> bool {
-        len <= MAX_WRITE && free(self.dsp_read, self.tx_write) as usize > len
+        len > 0 && len <= MAX_WRITE && free(self.dsp_read, self.tx_write) as usize > len
     }
 
     /// Write `data` and update our head. Returns the doorbell word to send.

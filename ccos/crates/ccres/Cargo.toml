@@ -1,0 +1,12 @@
+[package]
+name = "ccres"
+description = "PC-side tool: edit/preview the stock Elegoo UI resources, pack MCU firmware, encode/decode protocol frames"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cc-proto = { workspace = true, features = ["identify"] }
+cc-res = { workspace = true }
+cc-gui = { workspace = true }
+serde_json = { workspace = true }

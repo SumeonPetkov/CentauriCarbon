@@ -6,6 +6,13 @@
 /// Append `v` to `out`. Signed and unsigned values share the same encoding
 /// (pass `x as u32` for an `i32`).
 pub fn encode(out: &mut Vec<u8>, v: u32) {
+    let mut tmp = [0u8; 5];
+    let n = encode_into(&mut tmp, v);
+    out.extend_from_slice(&tmp[..n]);
+}
+
+/// Encode `v` into `out`, returning the number of bytes used (1..=5).
+pub fn encode_into(out: &mut [u8; 5], v: u32) -> usize {
     let sv = v as i32;
     let len = if (-(1 << 5)..(3 << 5)).contains(&sv) {
         1
@@ -18,12 +25,13 @@ pub fn encode(out: &mut Vec<u8>, v: u32) {
     } else {
         5
     };
-    for i in (1..len).rev() {
+    for (k, i) in (1..len).rev().enumerate() {
         let shift = 7 * i;
         let chunk = if shift == 28 { v >> 28 } else { (v >> shift) & 0x7f };
-        out.push(chunk as u8 | 0x80);
+        out[k] = chunk as u8 | 0x80;
     }
-    out.push((v & 0x7f) as u8);
+    out[len - 1] = (v & 0x7f) as u8;
+    len
 }
 
 /// Decode one value from the front of `buf`, returning it and the number of

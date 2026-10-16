@@ -4,10 +4,10 @@
 |---|---|---|
 | `firmware/` (`app`) | With a toolchain | `arm-openwrt-linux-gnueabi` g++ from the Allwinner Tina SDK for R528 (glibc). `CMakeLists.txt` hard-codes `arm-openwrt-linux-gcc/g++`; the ARM `.so`/`.a` libraries are in `firmware/lib/` (some removed from git in this fork — see `.gitignore`). `lib/ubToolenvLib.a` is prebuilt. |
 | `firmware/tools/widget`, `tools/tr` | Yes, host gcc | `gcc -o widget main.c widget.c` (same for `tr`). Replaced by `ccres`. |
-| `mcu/` (STM32 Klipper) | Yes | `arm-none-eabi-gcc`, `make`; `./build.sh -v 1.2.4 -t extruder` (or `-t sg`) → `out/upgrade_<t>_<v>.bin` + `_full_pack.bin`. `add_magic.c` needs OpenSSL dev headers. |
+| `mcu/` (STM32 Klipper) | Yes (or upstream Klipper: STM32F401, 48 KiB bootloader offset, 24 MHz crystal, USB PA11/PA12 for the toolhead, USART2 PA3/PA2 @ 115200 for the bed board — OpenCentauri's settings) | `arm-none-eabi-gcc`, `make`; `./build.sh -v 1.2.4 -t extruder` (or `-t sg`) → `out/upgrade_<t>_<v>.bin` + `_full_pack.bin`. `add_magic.c` needs OpenSSL dev headers. |
 | `mcu/bootloader/` | With STM32Cube/Keil | Keil MDK project (`MDK-ARM/`), prebuilt `bootloader.bin` in `mcu/board/*/bootloader/`. |
 | `dsp/` (HiFi4 Klipper) | **No** | Allwinner Tina RTOS SDK (`rtos-hal`, FreeRTOS Xtensa port, `aw-alsa-lib`, `console.h`, `imgdts.h`…) and Cadence Xtensa XCC with a HiFi4 core config — proprietary, not in the repo. Only `projects/r528/dsp0` sources and `defconfig` are here. |
-| `ccos/` (Rust) | Yes | `rustup target add armv7-unknown-linux-musleabihf`, then `cargo build --release --target armv7-unknown-linux-musleabihf`. Uses `rust-lld` (no cross C toolchain needed); produces static ~750 KB binaries. |
+| `ccos/` (Rust) | Yes | `rustup target add armv7-unknown-linux-musleabihf`, then `cargo build --release --target armv7-unknown-linux-musleabihf -p ccos`. Uses `rust-lld` (no cross C toolchain needed); produces one static ~600 KB binary with the UI compiled in. See [`ccos/README.md`](../../ccos/README.md). |
 
 ## Notes on the C++ build
 

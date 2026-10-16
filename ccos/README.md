@@ -1,83 +1,87 @@
-# ccos — Rust host toolkit for the Elegoo Centauri Carbon
+# ccos — lightweight native host for the Elegoo Centauri Carbon
 
-Foundation for replacing the Centauri Carbon's userspace (`/app/app`) with
-your own Rust code, plus tools to edit the stock UI today. Background and
-protocol details: [`docs/re/`](../docs/re/README.md).
+A replacement for Elegoo's `/app/app`, written in Rust and built to be as light
+as possible on the printer's 2x Cortex-A7 / 128 MB board:
 
-![dashboard rendered by `ccos ui --png`](../docs/re/img/ccos_dashboard.png)
+* **one static binary** (~600 KB, ARMv7 musl), depending only on `libc`;
+* an **English UI you edit as text** (`ui/*.toml`) and that is **compiled into
+  the binary** — no runtime parsing, no font engine, no image decoder;
+* **no allocation per frame or per MCU message**, redraws only what changed,
+  sleeps in `poll()` when idle.
 
-## Crates
+Background, protocol details and design notes: [`docs/re/`](../docs/re/README.md),
+especially [08 — ccos](../docs/re/08-rust-host-roadmap.md).
 
-| Crate | What |
-|---|---|
-| `cc-proto` | Klipper wire protocol with the printer's fixed 115-message id table |
-| `cc-transport` | Links: UART/USB serial, R528 DSP shared-memory ring + rpmsg doorbell |
-| `cc-res` | `widget.bin`, `translation.bin`, STM32 update images (read/write/CSV/JSON) |
-| `cc-gui` | Framebuffer + touch GUI: canvas, TTF/CJK text, PNG, widgets, stock-screen preview |
-| `ccos` | Binaries `ccos` (on the printer) and `ccres` (on your PC) |
+![home screen](../docs/re/img/ccos_home.png)
+
+**Status:** talks to all three MCUs (DSP, toolhead, bed board), shows live
+bed/chamber/nozzle temperatures, switches the chamber light, runs the hotend
+fan above 50 °C, probes and resets the MCUs. It does **not** print yet: no
+heaters, no motion (see the roadmap). The device-facing code follows Elegoo's
+source and OpenCentauri's working tools but has **not yet been run on a
+printer**.
+
+## Layout
+
+| Path | Ships to printer | What |
+|---|---|---|
+| `ui/` | compiled in | Theme, screens, fonts, icons — [how to edit](ui/README.md) |
+| `crates/ccos` | ✓ | The app: UI loop, MCU worker, CLI tools |
+| `crates/cc-ui` | ✓ | UI runtime: canvas, baked fonts, icons, framebuffer, touch, screen engine |
+| `crates/cc-proto` | ✓ | Klipper protocol with the printer's fixed message table, zero-alloc |
+| `crates/cc-transport` | ✓ | Serial links and the R528 DSP shared-memory link |
+| `crates/cc-ui-codegen` | build only | `ui/` → static Rust |
+| `crates/ccres`, `cc-res`, `cc-gui` | PC only | Tools for the **stock** UI resources and MCU firmware images |
 
 ## Build
 
 ```sh
-cargo test --release                       # 39 tests, use the shipped resources in ../firmware
-cargo build --release                      # host tools: target/release/ccres, ccos
 rustup target add armv7-unknown-linux-musleabihf
-cargo build --release --target armv7-unknown-linux-musleabihf
-# -> target/armv7-unknown-linux-musleabihf/release/{ccos,ccres}: static ARM binaries
+cargo test --release --workspace --all-features     # 63 tests
+cargo build --release --target armv7-unknown-linux-musleabihf -p ccos
+# -> target/armv7-unknown-linux-musleabihf/release/ccos
+cargo run --release -p ccos -- preview /tmp/screens  # render every screen on your PC
 ```
 
 No cross C toolchain is needed (linked with `rust-lld`, see `.cargo/config.toml`).
 
-## On your PC: `ccres`
+## Run on the printer
+
+Get a root shell with [OpenCentauri patched firmware](https://github.com/OpenCentauri/OpenCentauri)
+(SSH `root` / `OpenCentauri`), then:
+
+```sh
+scp target/armv7-unknown-linux-musleabihf/release/ccos root@<printer>:/user-resource/
+ssh root@<printer>
+killall app                   # Elegoo's UI/host owns the screen and MCUs
+/user-resource/ccos           # touchscreen UI
+```
+
+Reboot to get the stock firmware back. Other commands:
+
+```sh
+ccos probe all                # identify + clock-check DSP, toolhead, bed board
+ccos console toolhead         # raw Klipper commands (type `help`)
+ccos power-cycle toolhead     # reset an STM32 board and boot its firmware
+ccos dsp-log                  # follow the DSP's printf output
+ccos preview <dir>            # PNG of every screen
+```
+
+What happens on start: `ccos` refuses to touch the MCUs while `/app/app` runs.
+Otherwise it restarts the DSP through remoteproc if another host attached to
+it this boot (`--keep-dsp` disables that), power-cycles both STM32 boards and
+releases them from Elegoo's bootloader, configures the thermistor ADCs, the
+chamber light and the hotend fan, and starts the UI.
+
+## PC tool for the stock firmware: `ccres`
 
 ```sh
 R=../firmware/resources/e100
-ccres widget list $R/widget.csv
-ccres widget show $R/widget.csv 1            # decoded styles of window 1
-ccres preview $R all previews/ --annotate     # every stock screen as PNG
-ccres widget compile my_widgets.csv widget.bin
-ccres tr decompile $R/translation.bin strings.csv
-ccres mcu info ../firmware/resources/firmware/upgrade_sg.bin
-ccres mcu pack out/klipper.bin upgrade_extruder.bin --version 1.2.4
-ccres proto encode "get_uptime" 3
-ccres proto decode 08 10 01 00 28 5e 9f 7e
+cargo run --release -p ccres -- widget list $R/widget.csv
+cargo run --release -p ccres -- preview $R all previews/ --annotate
+cargo run --release -p ccres -- widget compile my_widgets.csv widget.bin
+cargo run --release -p ccres -- mcu info ../firmware/resources/firmware/upgrade_sg.bin
+cargo run --release -p ccres -- proto decode 08 10 01 00 28 5e 9f 7e
 ```
 
-## On the printer: `ccos`
-
-Copy `ccos` and stop Elegoo's `app` (only one process can own the MCU links,
-framebuffer and touchscreen). Reboot to go back to stock.
-
-```sh
-ccos probe all              # talk to DSP, toolhead and load-cell MCUs
-ccos console toolhead       # raw Klipper commands
-ccos power-cycle sg         # reset an STM32 board like the stock host does
-ccos temps                  # bed + chamber temperature via DSP ADC (fresh DSP only)
-ccos ui                     # touch dashboard on /dev/fb0 + /dev/input/event1
-ccos ui --png out.png --font ../firmware/resources/e100/fonts/font.ttc   # render on a PC
-```
-
-**Hardware status:** the protocol, ring buffer and resource code are tested
-against Elegoo's C implementation and shipped files. The device-facing parts
-(DSP ioctls, framebuffer, touch, GPIO) follow the stock source but have **not
-been run on a printer yet**. `ccos` deliberately never drives heaters or
-motors.
-
-## Writing your own UI
-
-`cc_gui::ui::Ui` is immediate-mode: describe the screen every frame and react
-to the return values. Start from `crates/ccos/src/dashboard.rs`:
-
-```rust
-ui.clear();
-ui.temp_tile(Rect::new(80, 6, 126, 90), "Nozzle", cur, target);
-if ui.button(Rect::new(362, 222, 104, 36), "Home") {
-    // queue G28
-}
-```
-
-`Canvas` also implements `embedded_graphics::DrawTarget`, so any
-embedded-graphics shapes, charts or image decoders draw straight onto it.
-
-Next steps toward a full printing host are in
-[`docs/re/08-rust-host-roadmap.md`](../docs/re/08-rust-host-roadmap.md).
+See [docs/re/05-ui-resources.md](../docs/re/05-ui-resources.md).

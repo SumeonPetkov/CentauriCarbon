@@ -1,14 +1,16 @@
 [package]
 name = "ccos"
-description = "Custom host software for the Elegoo Centauri Carbon (bring-up tools, GUI, resource editor)"
+description = "Lightweight native host for the Elegoo Centauri Carbon: AOT-compiled English UI + MCU links"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-default-run = "ccos"
+build = "build.rs"
 
 [dependencies]
-cc-proto.workspace = true
-cc-transport.workspace = true
-cc-res.workspace = true
-cc-gui.workspace = true
-serde_json.workspace = true
+cc-proto = { workspace = true }
+cc-transport = { workspace = true }
+cc-ui = { path = "../cc-ui" }
+libc = { workspace = true }
+
+[build-dependencies]
+cc-ui-codegen = { path = "../cc-ui-codegen" }

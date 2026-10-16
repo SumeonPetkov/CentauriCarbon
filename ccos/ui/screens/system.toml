@@ -1,0 +1,91 @@
+# Display and system settings.
+
+include = ["sidebar"]
+
+[[widget]]
+type = "panel"
+at = [72, 6, 402, 112]
+
+[[widget]]
+type = "label"
+at = [84, 12, 200, 20]
+text = "Backlight"
+font = "small"
+color = "dim"
+
+[[widget]]
+type = "label"
+at = [370, 12, 92, 20]
+value = "backlight_pct"
+font = "small"
+align = "right"
+
+[[widget]]
+type = "bar"
+at = [84, 38, 378, 12]
+value = "backlight"
+
+[[widget]]
+type = "button"
+at = [84, 60, 84, 48]
+text = "−"
+font = "big"
+bg = "pressed"
+tap = "backlight_down"
+
+[[widget]]
+type = "button"
+at = [176, 60, 84, 48]
+text = "+"
+font = "big"
+bg = "pressed"
+tap = "backlight_up"
+
+[[widget]]
+type = "button"
+at = [268, 60, 96, 48]
+text = "Screen off"
+bg = "pressed"
+tap = "screen_off"
+
+[[widget]]
+type = "button"
+at = [372, 60, 90, 48]
+text = "Exit"
+bg = "danger"
+tap = "exit"
+
+[[widget]]
+type = "panel"
+at = [72, 124, 402, 142]
+
+[[widget]]
+type = "label"
+at = [84, 130, 380, 22]
+value = "version"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [84, 154, 380, 22]
+value = "memory"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [84, 178, 380, 22]
+value = "cpu"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [84, 202, 380, 22]
+value = "uptime"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [84, 226, 380, 34]
+text = "Edit ccos/ui/*.toml and rebuild to change any screen."
+font = "small"
+color = "dim"

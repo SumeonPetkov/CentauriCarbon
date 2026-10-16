@@ -19,6 +19,7 @@ registered names: `grep -rhoE 'register_command\("[A-Z_0-9.]+"' firmware/core/kl
 | `BREAK_SAVE_STATUS`, `SDCARD_PRINT_FILE_BREAK_SAVE` | `break_save.cpp`, `virtual_sdcard.cpp` | Power-loss resume |
 | `FLOW_CALIBRATION` | | Flow test pattern (`[flow_calibration]`) |
 | `M222 S<mm/s>` / `M223 S<mm/s>` | `toolhead.cpp` | Set max XY / Z velocity at runtime (ignored from print files) |
+| Speed modes (UI) | | Silent / Balanced / Sport / Ludicrous = 50 / 100 / 130 / 160 % speed (measured by OpenCentauri) |
 | `O1`, `O9`, `O21`–`O32` | `palette2.cpp` | Upstream Klipper Palette 2 support, left compiled in |
 
 ## `M8000`–`M8826`: config editing from G-code
@@ -46,7 +47,7 @@ section (from the source comments):
 | M8804 | Set UI language |
 | M8805 | Beeper on/off |
 | M8806 | Filament runout detection on/off |
-| M8807 | Copy `user_printer.cfg` from USB to the printer |
+| M8807 | Copy `printer.cfg` and (if present) `user_printer.cfg` from USB to the printer |
 | M8808 | First-boot flag |
 | M8809 | Wi-Fi on/off |
 | M8811 | Region |
@@ -64,5 +65,6 @@ M8803        ; dump printer.cfg / user_printer.cfg / unmodifiable.cfg to the USB
 ```
 
 is a no-shell way to pull the live configs off the printer, and `M8807` the way
-to push an edited `user_printer.cfg` back (it takes effect after a restart). Treat stepper/pin commands with care:
+to push edited configs back (read at the next start; an invalid config can stop
+the printer from booting). Treat stepper/pin commands with care:
 they change the hardware mapping.

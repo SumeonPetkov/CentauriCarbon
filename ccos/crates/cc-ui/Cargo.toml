@@ -1,0 +1,9 @@
+[package]
+name = "cc-ui"
+description = "Allocation-free, ahead-of-time compiled UI runtime for the Centauri Carbon 480x272 touchscreen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc.workspace = true

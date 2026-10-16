@@ -1,0 +1,87 @@
+# Manual control. G-code actions go to the printer core
+# (`Action::Gcode` in src/main.rs).
+
+include = ["sidebar"]
+
+[[widget]]
+type = "label"
+at = [76, 6, 200, 24]
+text = "Move  (10 mm)"
+font = "bold"
+
+[[widget]]
+type = "button"
+at = [140, 36, 70, 56]
+text = "Y+"
+tap = "gcode G91\nG1 Y10 F6000\nG90"
+
+[[widget]]
+type = "button"
+at = [72, 98, 70, 56]
+text = "X−"
+tap = "gcode G91\nG1 X-10 F6000\nG90"
+
+[[widget]]
+type = "button"
+at = [148, 98, 56, 56]
+text = "XY"
+tap = "gcode G28 X Y"
+
+[[widget]]
+type = "button"
+at = [210, 98, 70, 56]
+text = "X+"
+tap = "gcode G91\nG1 X10 F6000\nG90"
+
+[[widget]]
+type = "button"
+at = [140, 160, 70, 56]
+text = "Y−"
+tap = "gcode G91\nG1 Y-10 F6000\nG90"
+
+[[widget]]
+type = "button"
+at = [300, 36, 80, 56]
+icon = "z_up"
+text = "Z up"
+tap = "gcode G91\nG1 Z10 F600\nG90"
+
+[[widget]]
+type = "button"
+at = [300, 98, 80, 56]
+text = "Home Z"
+tap = "gcode G28 Z"
+
+[[widget]]
+type = "button"
+at = [300, 160, 80, 56]
+icon = "z_down"
+text = "Z down"
+tap = "gcode G91\nG1 Z-10 F600\nG90"
+
+[[widget]]
+type = "button"
+at = [390, 36, 84, 56]
+icon = "fan"
+text = "Fan"
+tap = "gcode M106 S255"
+
+[[widget]]
+type = "button"
+at = [390, 98, 84, 56]
+text = "Fan off"
+tap = "gcode M107"
+
+[[widget]]
+type = "button"
+at = [390, 160, 84, 56]
+text = "Motors\noff"
+tap = "gcode M84"
+
+[[widget]]
+type = "label"
+id = "status"
+at = [76, 226, 398, 40]
+value = "status"
+font = "small"
+color = "dim"

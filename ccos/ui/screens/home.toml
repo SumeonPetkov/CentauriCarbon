@@ -1,0 +1,88 @@
+# Home screen. Widgets draw in file order (later ones on top).
+#
+# type   : panel | label | button | toggle | icon | temp | bar
+# at     : [x, y, width, height] in pixels (screen is 480 x 272)
+# text   : fixed English text          value  : live text from the app
+# tap    : "goto <screen>" | "back" | "gcode <line>" | <command_name>
+# show_if / on_if : a flag name, "!flag", or "@screen"
+# Optional: id, icon, icon_on, font, color, bg ("none" = transparent),
+#           pressed, accent, radius, align (left|center|right), target
+
+include = ["sidebar"]
+
+[[widget]]
+type = "temp"
+id = "nozzle"
+at = [72, 6, 132, 96]
+text = "Nozzle"
+icon = "nozzle"
+icon_on = "nozzle_hot"
+value = "nozzle_temp"
+target = "nozzle_target"
+on_if = "nozzle_heating"
+
+[[widget]]
+type = "temp"
+id = "bed"
+at = [210, 6, 132, 96]
+text = "Bed"
+icon = "bed"
+icon_on = "bed_hot"
+value = "bed_temp"
+target = "bed_target"
+on_if = "bed_heating"
+
+[[widget]]
+type = "temp"
+id = "chamber"
+at = [348, 6, 126, 96]
+text = "Chamber"
+icon = "chamber"
+value = "chamber_temp"
+
+[[widget]]
+type = "panel"
+at = [72, 108, 402, 92]
+
+[[widget]]
+type = "label"
+at = [84, 112, 200, 20]
+text = "Status"
+font = "small"
+color = "dim"
+
+[[widget]]
+type = "label"
+id = "status"
+at = [84, 132, 380, 24]
+value = "status"
+
+[[widget]]
+type = "label"
+id = "links"
+at = [84, 162, 380, 32]
+value = "links"
+font = "small"
+color = "dim"
+
+[[widget]]
+type = "toggle"
+id = "light"
+at = [72, 206, 128, 60]
+text = "Light"
+icon = "light"
+icon_on = "light_on"
+on_if = "light_on"
+tap = "toggle_light"
+
+[[widget]]
+type = "button"
+at = [209, 206, 128, 60]
+text = "Home all"
+tap = "gcode G28"
+
+[[widget]]
+type = "button"
+at = [346, 206, 128, 60]
+text = "Motors off"
+tap = "gcode M84"

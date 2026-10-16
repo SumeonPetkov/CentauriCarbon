@@ -1,0 +1,58 @@
+# ccos UI theme. Everything here is compiled into the binary at build time:
+# fonts are pre-rendered to bitmaps, icons converted, colours become constants.
+# Edit, run `cargo build`, done. Build errors point at the exact line.
+
+[colors]
+bg = "#1E1E20"       # screen background
+panel = "#383837"    # tiles, buttons
+pressed = "#505050"  # button while touched, bar track
+accent = "#22D000"   # Elegoo green: active items, bars
+text = "#FFFFFF"
+dim = "#A0A0A0"
+hot = "#FF7A1A"
+danger = "#E03030"
+
+# Fonts are baked at the given pixel size. All characters used in screen text
+# plus ASCII and ° ± × · — – − → ← ↑ ↓ … • ✓ ✗ are included (live values can use
+# those); add more per font with chars = "...". Missing glyphs are a build warning.
+[fonts]
+small = { file = "fonts/DejaVuSans.ttf", size = 13 }
+body = { file = "fonts/DejaVuSans.ttf", size = 16 }
+bold = { file = "fonts/DejaVuSans-Bold.ttf", size = 16 }
+big = { file = "fonts/DejaVuSans-Bold.ttf", size = 28 }
+
+# name = "file.png", or { file = "...", tint = "<colour>" } to re-colour a
+# single-colour icon (stored as a 4-bit mask either way).
+[icons]
+home = { file = "icons/home.png", tint = "dim" }
+home_on = { file = "icons/home.png", tint = "accent" }
+control = { file = "icons/control.png", tint = "dim" }
+control_on = { file = "icons/control.png", tint = "accent" }
+tools = { file = "icons/tools.png", tint = "dim" }
+tools_on = { file = "icons/tools.png", tint = "accent" }
+settings = { file = "icons/settings.png", tint = "dim" }
+settings_on = { file = "icons/settings.png", tint = "accent" }
+nozzle = "icons/nozzle.png"
+nozzle_hot = "icons/nozzle_hot.png"
+bed = "icons/bed.png"
+bed_hot = "icons/bed_hot.png"
+chamber = "icons/chamber.png"
+light = "icons/light.png"
+light_on = { file = "icons/light_on.png", tint = "accent" }
+fan = "icons/fan.png"
+z_up = "icons/z_up.png"
+z_down = "icons/z_down.png"
+
+# Used when a widget doesn't say otherwise.
+[defaults]
+start = "home"          # first screen shown
+background = "bg"
+text = "text"
+dim = "dim"
+panel = "panel"
+pressed = "pressed"
+accent = "accent"
+font = "body"
+small_font = "small"    # temp tile titles and targets
+big_font = "big"        # temp tile values
+radius = 10

@@ -4,10 +4,27 @@
 
 | Processor | Runs | Source in repo |
 |---|---|---|
-| R528 2x Cortex-A7 | Linux 5.4.61 (Allwinner Tina, OpenWrt-based, glibc), the `app` binary | `firmware/` |
-| R528 HiFi4 DSP (Xtensa) | FreeRTOS + Klipper MCU firmware (main board I/O) | `dsp/projects/r528/dsp0/` (project files only, no SDK) |
-| STM32F401 "extruder" (toolhead) | Klipper MCU firmware + 48 KiB bootloader | `mcu/` with `board/extruder` |
-| STM32F401 "sg" (strain gauge / load cell) | Klipper MCU firmware + bootloader | `mcu/` with `board/sg` |
+| R528-S3, 2x Cortex-A7, 128 MB DDR3 in package, 8 GB eMMC | Tina Linux (OpenWrt-based), kernel 5.4.61, glibc 2.23; the `app` binary | `firmware/` |
+| R528 HiFi4 DSP (Xtensa) | FreeRTOS + Klipper MCU firmware (main board I/O); image in the `dsp0A`/`dsp0B` partitions | `dsp/projects/r528/dsp0/` (project files only, no SDK) |
+| STM32F402RCT6 "extruder" (toolhead) | Klipper MCU firmware behind Elegoo's 32 KiB YMODEM bootloader | `mcu/` with `board/extruder` |
+| STM32F402RCT6 "sg" (bed / load-cell board) | Klipper MCU firmware behind the same bootloader | `mcu/` with `board/sg` |
+
+The STM32F402 is a China-market variant; build for STM32F401 (Elegoo's
+configs and OpenCentauri do the same). Hardware photos and connector pinouts:
+[OpenCentauri hardware docs](https://github.com/OpenCentauri/OpenCentauri/tree/main/docs/hardware/CC1).
+
+## eMMC partitions (from OpenCentauri)
+
+| Partition | Content |
+|---|---|
+| `boot-resource` (p1) | boot logos |
+| `env`, `env-redund` (p2, p3) | u-boot environment, incl. the active A/B slot (`boot_partition`) |
+| `bootA` / `rootfsA` / `dsp0A` (p4–p6) | slot A: kernel, root filesystem, DSP firmware |
+| `bootB` / `rootfsB` / `dsp0B` (p7–p9) | slot B |
+| `rootfs_data` (p10) | overlay data |
+| `user` (p11) | logs |
+| `private` (p12) | empty |
+| `UDISK` (p13) | user files (`/user-resource`) |
 
 The repo also contains an `e100_lite` variant (`app/e100_lite`,
 `resources/e100_lite`, `CMakeLists.txt.e100_lite`) for a cheaper model.

@@ -1,0 +1,12 @@
+[package]
+name = "cc-ui-codegen"
+description = "Build-time compiler: ui/*.toml + fonts + icons -> static Rust tables for cc-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+toml = "0.8"
+fontdue = "0.9"
+png = "0.17"

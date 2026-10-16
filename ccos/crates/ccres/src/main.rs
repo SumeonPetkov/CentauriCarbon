@@ -206,7 +206,9 @@ fn mcu_pack(i: &str, o: &str, rest: &[&str]) -> Result<()> {
 
 fn proto_encode(cmd: &str, seq: u8) -> Result<()> {
     let d = cc_proto::Dictionary::centauri();
-    let f = cc_proto::encode_frame(seq, &d.encode_str(cmd)?)?;
+    let mut p = cc_proto::MsgBuf::new();
+    d.encode_str(cmd, &mut p)?;
+    let f = cc_proto::encode_frame(seq, p.as_slice())?;
     println!("{}", f.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "));
     Ok(())
 }
@@ -223,14 +225,14 @@ fn proto_decode(hex: &str) -> Result<()> {
         if f.is_ack() {
             println!("seq {:2}: ack", f.seq);
         }
-        for m in d.decode_payload(&f.payload)? {
-            println!("seq {:2}: {m}", f.seq);
+        for m in d.decode(f.payload.as_slice()) {
+            println!("seq {:2}: {}", f.seq, m?);
         }
     }
     if !any {
         // Bare payload without framing
-        for m in d.decode_payload(&bytes)? {
-            println!("{m}");
+        for m in d.decode(&bytes) {
+            println!("{}", m?);
         }
     }
     Ok(())
@@ -238,10 +240,8 @@ fn proto_decode(hex: &str) -> Result<()> {
 
 fn proto_list() -> Result<()> {
     let d = cc_proto::Dictionary::centauri();
-    let mut f: Vec<_> = d.formats().map(|f| (f.id, f.format.clone())).collect();
-    f.sort();
-    for (id, s) in f {
-        println!("{id:3} {s}");
+    for f in d.formats() {
+        println!("{:3} {}", f.id, f.format);
     }
     Ok(())
 }

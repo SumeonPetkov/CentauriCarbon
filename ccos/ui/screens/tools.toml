@@ -1,0 +1,69 @@
+# Bring-up tools for the three MCUs.
+
+include = ["sidebar"]
+
+[[widget]]
+type = "label"
+at = [76, 6, 300, 24]
+text = "MCU tools"
+font = "bold"
+
+[[widget]]
+type = "button"
+at = [72, 36, 132, 52]
+text = "Probe all"
+tap = "probe"
+
+[[widget]]
+type = "button"
+at = [210, 36, 132, 52]
+text = "Reset toolhead"
+font = "small"
+tap = "reset_toolhead"
+
+[[widget]]
+type = "button"
+at = [348, 36, 126, 52]
+text = "Reset load cell"
+font = "small"
+tap = "reset_load_cell"
+
+[[widget]]
+type = "panel"
+at = [72, 96, 402, 170]
+
+[[widget]]
+type = "label"
+at = [84, 102, 380, 26]
+value = "log_1"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [84, 128, 380, 26]
+value = "log_2"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [84, 154, 380, 26]
+value = "log_3"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [84, 180, 380, 26]
+value = "log_4"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [84, 206, 380, 26]
+value = "log_5"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [84, 232, 380, 26]
+value = "log_6"
+font = "small"

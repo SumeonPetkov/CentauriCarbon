@@ -1,11 +1,17 @@
 [package]
 name = "cc-proto"
-description = "Klipper MCU wire protocol as spoken by the Elegoo Centauri Carbon (fixed id table)"
+description = "Klipper MCU wire protocol as spoken by the Elegoo Centauri Carbon (fixed id table, no allocation)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Parse upstream Klipper identify dictionaries (zlib + JSON). Host tools only.
+identify = ["dep:miniz_oxide", "dep:serde_json"]
+
 [dependencies]
-serde.workspace = true
-serde_json.workspace = true
+miniz_oxide = { version = "0.8", optional = true }
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
 miniz_oxide = "0.8"

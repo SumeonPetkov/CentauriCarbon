@@ -92,11 +92,44 @@ impl Link for SerialLink {
         if r == 0 {
             return Ok(0);
         }
+        if pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 && pfd.revents & libc::POLLIN == 0 {
+            // e.g. the USB toolhead re-enumerated or was unplugged
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "serial device hung up"));
+        }
         let n = unsafe { libc::read(self.fd.as_raw_fd(), buf.as_mut_ptr() as _, buf.len()) };
         if n < 0 {
             let e = io::Error::last_os_error();
             return if e.kind() == io::ErrorKind::WouldBlock { Ok(0) } else { Err(e) };
         }
+        if n == 0 {
+            // Readable but no data: end of file (device gone).
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "serial device closed"));
+        }
         Ok(n as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pty stands in for the USB CDC port: data flows, and closing the
+    /// other end must surface as an error (not a silent busy loop).
+    #[test]
+    fn pty_data_then_hangup_is_an_error() {
+        unsafe {
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(master >= 0);
+            assert_eq!(libc::grantpt(master), 0);
+            assert_eq!(libc::unlockpt(master), 0);
+            let name = std::ffi::CStr::from_ptr(libc::ptsname(master)).to_str().unwrap().to_string();
+            let mut link = SerialLink::open(&name, 115200).unwrap();
+            assert_eq!(libc::write(master, b"\x7e".as_ptr() as _, 1), 1);
+            let mut buf = [0u8; 16];
+            assert_eq!(link.recv(&mut buf, Duration::from_millis(500)).unwrap(), 1);
+            assert_eq!(link.recv(&mut buf, Duration::from_millis(20)).unwrap(), 0, "timeout is Ok(0)");
+            libc::close(master);
+            assert!(link.recv(&mut buf, Duration::from_millis(200)).is_err());
+        }
     }
 }

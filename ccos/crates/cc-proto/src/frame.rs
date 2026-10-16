@@ -1,30 +1,56 @@
 //! Message-block framing: `| len | seq | payload | crc_hi | crc_lo | 0x7e |`.
 
-use crate::{crc16_ccitt, Error, MESSAGE_DEST, MESSAGE_MAX, MESSAGE_MIN, MESSAGE_PAYLOAD_MAX,
-            MESSAGE_SEQ_MASK, MESSAGE_SYNC, MESSAGE_TRAILER_SIZE};
+use crate::dict::MsgBuf;
+use crate::{crc16_ccitt, Error, MESSAGE_DEST, MESSAGE_MAX, MESSAGE_MIN, MESSAGE_PAYLOAD_MAX, MESSAGE_SEQ_MASK,
+            MESSAGE_SYNC, MESSAGE_TRAILER_SIZE};
 
-/// Wrap `payload` in a frame with sequence number `seq` (only the low 4 bits
-/// are used).
-pub fn encode_frame(seq: u8, payload: &[u8]) -> Result<Vec<u8>, Error> {
+/// One encoded frame, by value (≤ 64 bytes, no heap).
+#[derive(Clone, Copy)]
+pub struct FrameBuf {
+    buf: [u8; MESSAGE_MAX],
+    len: u8,
+}
+
+impl FrameBuf {
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buf[..self.len as usize]
+    }
+}
+
+impl core::ops::Deref for FrameBuf {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl core::fmt::Debug for FrameBuf {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:02x?}", self.as_slice())
+    }
+}
+
+/// Wrap `payload` in a frame with sequence number `seq` (low 4 bits used).
+pub fn encode_frame(seq: u8, payload: &[u8]) -> Result<FrameBuf, Error> {
     if payload.len() > MESSAGE_PAYLOAD_MAX {
         return Err(Error::TooLong(payload.len()));
     }
     let len = payload.len() + MESSAGE_MIN;
-    let mut out = Vec::with_capacity(len);
-    out.push(len as u8);
-    out.push(MESSAGE_DEST | (seq & MESSAGE_SEQ_MASK));
-    out.extend_from_slice(payload);
-    let crc = crc16_ccitt(&out);
-    out.extend_from_slice(&crc.to_be_bytes());
-    out.push(MESSAGE_SYNC);
-    Ok(out)
+    let mut f = FrameBuf { buf: [0; MESSAGE_MAX], len: len as u8 };
+    f.buf[0] = len as u8;
+    f.buf[1] = MESSAGE_DEST | (seq & MESSAGE_SEQ_MASK);
+    f.buf[2..2 + payload.len()].copy_from_slice(payload);
+    let crc = crc16_ccitt(&f.buf[..len - 3]);
+    f.buf[len - 3..len - 1].copy_from_slice(&crc.to_be_bytes());
+    f.buf[len - 1] = MESSAGE_SYNC;
+    Ok(f)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct Frame {
     /// Sequence number (0..=15).
     pub seq: u8,
-    pub payload: Vec<u8>,
+    pub payload: MsgBuf,
 }
 
 impl Frame {
@@ -34,20 +60,27 @@ impl Frame {
     }
 }
 
-/// Outcome of validating the front of a buffer (mirrors `msgblock_check`).
 enum Check {
     NeedMore,
     Valid(usize),
     Discard(usize),
 }
 
-/// Streaming frame decoder with Klipper-style resynchronisation on 0x7e.
-#[derive(Default)]
+/// Streaming frame decoder with Klipper-style resynchronisation on 0x7e
+/// (mirrors `msgblock_check`). Fixed 4 KiB buffer, no allocation.
 pub struct FrameDecoder {
-    buf: Vec<u8>,
+    buf: [u8; 4096],
+    start: usize,
+    end: usize,
     need_sync: bool,
-    /// Bytes thrown away while resynchronising (for diagnostics).
+    /// Bytes thrown away while resynchronising (diagnostics).
     pub discarded: u64,
+}
+
+impl Default for FrameDecoder {
+    fn default() -> Self {
+        Self { buf: [0; 4096], start: 0, end: 0, need_sync: false, discarded: 0 }
+    }
 }
 
 impl FrameDecoder {
@@ -55,8 +88,34 @@ impl FrameDecoder {
         Self::default()
     }
 
-    pub fn push(&mut self, data: &[u8]) {
-        self.buf.extend_from_slice(data);
+    /// Free space for [`push`](Self::push) without data loss.
+    pub fn space(&self) -> usize {
+        self.buf.len() - (self.end - self.start)
+    }
+
+    /// Append received bytes. If more than [`space`](Self::space) arrives the
+    /// oldest unparsed bytes are dropped (and counted in `discarded`).
+    pub fn push(&mut self, mut data: &[u8]) {
+        if data.len() > self.buf.len() {
+            self.discarded += (data.len() - self.buf.len()) as u64;
+            data = &data[data.len() - self.buf.len()..];
+        }
+        if self.end + data.len() > self.buf.len() {
+            self.buf.copy_within(self.start..self.end, 0);
+            self.end -= self.start;
+            self.start = 0;
+        }
+        if self.end + data.len() > self.buf.len() {
+            let drop = self.end + data.len() - self.buf.len();
+            self.discarded += drop as u64;
+            self.start = drop;
+            self.need_sync = true;
+            self.buf.copy_within(self.start..self.end, 0);
+            self.end -= self.start;
+            self.start = 0;
+        }
+        self.buf[self.end..self.end + data.len()].copy_from_slice(data);
+        self.end += data.len();
     }
 
     /// Pop the next complete, valid frame if one is buffered.
@@ -66,14 +125,15 @@ impl FrameDecoder {
                 Check::NeedMore => return None,
                 Check::Discard(n) => {
                     self.discarded += n as u64;
-                    self.buf.drain(..n);
+                    self.start += n;
                 }
                 Check::Valid(n) => {
+                    let b = &self.buf[self.start..self.start + n];
                     let frame = Frame {
-                        seq: self.buf[1] & MESSAGE_SEQ_MASK,
-                        payload: self.buf[2..n - MESSAGE_TRAILER_SIZE].to_vec(),
+                        seq: b[1] & MESSAGE_SEQ_MASK,
+                        payload: MsgBuf::from_slice(&b[2..n - MESSAGE_TRAILER_SIZE]).expect("payload ≤ 59"),
                     };
-                    self.buf.drain(..n);
+                    self.start += n;
                     return Some(frame);
                 }
             }
@@ -81,7 +141,7 @@ impl FrameDecoder {
     }
 
     fn check(&mut self) -> Check {
-        let buf = &self.buf;
+        let buf = &self.buf[self.start..self.end];
         if buf.is_empty() {
             return Check::NeedMore;
         }
@@ -125,7 +185,7 @@ mod tests {
 
     #[test]
     fn encode_matches_c() {
-        assert_eq!(encode_frame(0, &[0x01, 0x00, 0x28]).unwrap(), IDENTIFY);
+        assert_eq!(encode_frame(0, &[0x01, 0x00, 0x28]).unwrap().as_slice(), IDENTIFY);
     }
 
     #[test]
@@ -133,15 +193,15 @@ mod tests {
         let mut d = FrameDecoder::new();
         d.push(&[0x00, 0x55, 0x7e]); // line noise ending in a sync byte
         d.push(&IDENTIFY[..3]);
-        assert_eq!(d.next_frame(), None);
+        assert!(d.next_frame().is_none());
         d.push(&IDENTIFY[3..]);
-        let ack = encode_frame(5, &[]).unwrap();
-        d.push(&ack);
-        assert_eq!(d.next_frame(), Some(Frame { seq: 0, payload: vec![1, 0, 0x28] }));
+        d.push(&encode_frame(5, &[]).unwrap());
+        let f = d.next_frame().unwrap();
+        assert_eq!((f.seq, f.payload.as_slice()), (0, &[1u8, 0, 0x28][..]));
         let f = d.next_frame().unwrap();
         assert!(f.is_ack());
         assert_eq!(f.seq, 5);
-        assert_eq!(d.next_frame(), None);
+        assert!(d.next_frame().is_none());
         assert_eq!(d.discarded, 3);
     }
 
@@ -152,8 +212,48 @@ mod tests {
         let mut d = FrameDecoder::new();
         d.push(&bad);
         d.push(&IDENTIFY);
-        assert_eq!(d.next_frame().unwrap().payload, vec![1, 0, 0x28]);
-        assert_eq!(d.next_frame(), None);
+        assert_eq!(d.next_frame().unwrap().payload.as_slice(), &[1, 0, 0x28]);
+        assert!(d.next_frame().is_none());
+    }
+
+    #[test]
+    fn long_streams_compact_without_loss() {
+        let mut d = FrameDecoder::new();
+        let mut n = 0;
+        for i in 0..5000u32 {
+            d.push(&encode_frame(i as u8, &[1, 0, (i % 90) as u8]).unwrap());
+            while let Some(f) = d.next_frame() {
+                assert_eq!(f.payload.as_slice()[2], (n % 90) as u8);
+                n += 1;
+            }
+        }
+        assert_eq!(n, 5000);
+        assert_eq!(d.discarded, 0);
+    }
+
+    #[test]
+    fn garbage_then_frame() {
+        let mut d = FrameDecoder::new();
+        d.push(&[0x55; 5000]);
+        assert!(d.next_frame().is_none());
+        // Like msgblock_check: after losing sync, data is only trusted again
+        // after a 0x7e (the host sends sync bytes; the MCU's trailers do it).
+        d.push(&[0x7e]);
+        d.push(&IDENTIFY);
+        assert_eq!(d.next_frame().unwrap().payload.as_slice(), &[1, 0, 0x28]);
+        assert_eq!(d.discarded, 5001);
+    }
+
+    #[test]
+    fn overflow_never_panics() {
+        let mut d = FrameDecoder::new();
+        for i in 0..20 {
+            d.push(&[(i * 37) as u8; 1000]);
+            d.push(&IDENTIFY[..4]);
+        }
+        d.push(&IDENTIFY);
+        while d.next_frame().is_some() {}
+        assert!(d.space() > 0);
     }
 
     #[test]
