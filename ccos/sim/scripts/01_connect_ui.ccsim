@@ -1,0 +1,18 @@
+# ccos connects to all three virtual MCUs (power-cycling the STM32 boards
+# through the fake GPIO tree), shows live temperatures, and the UI works.
+wait_until links == 3 timeout 20
+wait_until host_bed > 15 timeout 5
+expect mcu_shutdown == "none"
+screenshot shots/home.png
+tap "Light"
+wait_until light == 1 timeout 2
+tap "Light"
+wait_until light == 0 timeout 2
+goto tools
+tap "Probe all"
+wait 0.3
+screenshot shots/tools.png
+goto print
+wait 0.3
+expect status !~ "error"
+screenshot shots/print.png

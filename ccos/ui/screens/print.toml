@@ -1,0 +1,138 @@
+# Printing: files from the G-code folder (newest first), progress, pause /
+# resume / cancel. File names, progress and state come from the app
+# (src/app.rs); the commands are handled in src/runtime.rs.
+
+include = ["sidebar"]
+
+[[widget]]
+type = "label"
+at = [76, 6, 220, 22]
+text = "Files"
+font = "bold"
+
+[[widget]]
+type = "button"
+at = [72, 32, 226, 38]
+value = "file_1"
+align = "left"
+font = "small"
+tap = "print_file_1"
+show_if = "has_file_1"
+
+[[widget]]
+type = "button"
+at = [72, 74, 226, 38]
+value = "file_2"
+align = "left"
+font = "small"
+tap = "print_file_2"
+show_if = "has_file_2"
+
+[[widget]]
+type = "button"
+at = [72, 116, 226, 38]
+value = "file_3"
+align = "left"
+font = "small"
+tap = "print_file_3"
+show_if = "has_file_3"
+
+[[widget]]
+type = "button"
+at = [72, 158, 226, 38]
+value = "file_4"
+align = "left"
+font = "small"
+tap = "print_file_4"
+show_if = "has_file_4"
+
+[[widget]]
+type = "button"
+at = [72, 200, 226, 38]
+value = "file_5"
+align = "left"
+font = "small"
+tap = "print_file_5"
+show_if = "has_file_5"
+
+[[widget]]
+type = "label"
+at = [76, 36, 220, 120]
+value = "files_hint"
+font = "small"
+color = "dim"
+show_if = "!has_file_1"
+
+[[widget]]
+type = "button"
+at = [72, 244, 226, 26]
+text = "Refresh"
+font = "small"
+tap = "refresh_files"
+
+[[widget]]
+type = "panel"
+at = [304, 6, 170, 140]
+
+[[widget]]
+type = "label"
+id = "state"
+at = [312, 10, 156, 22]
+value = "print_state"
+font = "bold"
+
+[[widget]]
+type = "label"
+at = [312, 34, 156, 40]
+value = "print_file"
+font = "small"
+color = "dim"
+
+[[widget]]
+type = "bar"
+at = [312, 78, 154, 12]
+value = "print_progress"
+
+[[widget]]
+type = "label"
+at = [312, 94, 156, 22]
+value = "print_progress_text"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [312, 118, 156, 22]
+value = "position"
+font = "small"
+color = "dim"
+
+[[widget]]
+type = "button"
+at = [304, 152, 82, 50]
+text = "Pause"
+tap = "pause"
+show_if = "printing"
+
+[[widget]]
+type = "button"
+at = [304, 152, 82, 50]
+text = "Resume"
+accent = "accent"
+tap = "resume"
+show_if = "paused"
+
+[[widget]]
+type = "button"
+at = [392, 152, 82, 50]
+text = "Cancel"
+color = "danger"
+tap = "cancel"
+show_if = "print_active"
+
+[[widget]]
+type = "label"
+id = "status"
+at = [304, 208, 170, 60]
+value = "status"
+font = "small"
+color = "dim"

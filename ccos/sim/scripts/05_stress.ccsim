@@ -1,0 +1,29 @@
+# Step pipeline under stress: G2 arcs, 300 mm/s zig-zag at 20000 mm/s²,
+# and 1 in 2000 bytes from the host corrupted on the wire (frames are
+# NAKed/retransmitted; nothing may be lost or late).
+option speed 20
+option corrupt 0.0005
+wait_until links == 3 timeout 30
+print arc_rings.gcode
+wait_until print_state == "Finished" timeout 240
+# rings of radius 10..20 around (100, 100), plus the prime line
+expect bbox_x1 > 119.9
+expect bbox_x1 < 120.2
+expect bbox_y1 > 119.9
+expect bbox_y1 < 120.2
+expect layers == 4
+bedshot shots/arcs_bed.png
+print speed_zigzag.gcode
+wait_until print_state == "Finished" timeout 240
+expect bbox_x0 > 9.9
+expect bbox_x1 > 199.9
+expect bbox_x1 < 200.1
+expect bbox_y1 > 99.9
+expect bbox_y1 < 100.1
+expect cold_extrusion == 0
+expect lost_steps == 0
+expect mcu_shutdown == "none"
+expect shutdown == "none"
+expect retransmits > 0
+show retransmits naks extruded
+bedshot shots/zigzag_bed.png

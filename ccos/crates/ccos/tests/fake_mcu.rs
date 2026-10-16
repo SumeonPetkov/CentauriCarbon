@@ -73,11 +73,11 @@ fn host_stack_against_fake_mcu_over_pty() {
     std::thread::spawn(move || fake_mcu(master, hz));
 
     let link = SerialLink::open(&name, 115200).unwrap();
-    let mut m = Mcu::new("fake", Box::new(link));
+    let mut m = Mcu::new("fake", Box::new(link), hz, 192);
     m.sync().unwrap();
     assert_eq!(m.identify().unwrap(), BLOB);
     let cfg = m.request("get_config", "config").unwrap();
     assert_eq!(cfg.int("is_config"), Some(0));
-    let measured = m.measure_clock().unwrap();
+    let measured = m.measure_clock(0.5).unwrap();
     assert!((measured - hz).abs() / hz < 0.05, "clock {measured}");
 }

@@ -1,5 +1,18 @@
+//! `ccos`: a lightweight native host for the Elegoo Centauri Carbon.
+//!
+//! Threads: the UI (`runtime`), the printer core I/O loop (`core`), and the
+//! G-code thread (`gcode`). Talks to real hardware or to `ccsim` (`hw`).
+
 pub mod app;
+pub mod clock;
+pub mod core;
+pub mod gcode;
+pub mod heater;
+pub mod hw;
+pub mod machine;
 pub mod mcu;
+pub mod motion;
+pub mod runtime;
 pub mod sys;
 
 /// Screens, fonts and icons compiled from `ccos/ui/` by `build.rs`.
@@ -66,75 +79,5 @@ impl Target {
             Target::Toolhead => Some(4 * 32 + 12),   // PE12
             Target::StrainGauge => Some(6 * 32 + 9), // PG9
         }
-    }
-
-    /// Serial device and baud rate of this board.
-    pub fn port(self) -> Option<(&'static str, u32)> {
-        use cc_transport::serial::*;
-        match self {
-            Target::Dsp => None,
-            Target::Toolhead => Some((TOOLHEAD_PORT, TOOLHEAD_BAUD)),
-            Target::StrainGauge => Some((STRAIN_GAUGE_PORT, STRAIN_GAUGE_BAUD)),
-        }
-    }
-
-    /// Power-cycle an STM32 board and boot its existing firmware, leaving it
-    /// unconfigured.
-    ///
-    /// Sequence: power pin low 1 s, high (as `MCU::mcu_identify`). Elegoo's
-    /// bootloader then waits **indefinitely** for a YMODEM upload; an `a`
-    /// byte (ABORT2 in `mcu/bootloader/Utils/Src/ymodem.c`) makes it jump to
-    /// the application. The toolhead re-enumerates on USB afterwards.
-    #[cfg(target_os = "linux")]
-    pub fn power_cycle(self) -> std::io::Result<()> {
-        use cc_transport::Link;
-        use std::fs::write;
-        use std::thread::sleep;
-        use std::time::{Duration, Instant};
-        let (Some(n), Some((port, baud))) = (self.power_gpio(), self.port()) else {
-            return Err(std::io::Error::other("the DSP is restarted via remoteproc, not a power pin"));
-        };
-        let base = format!("/sys/class/gpio/gpio{n}");
-        if !std::path::Path::new(&base).exists() {
-            write("/sys/class/gpio/export", n.to_string())?;
-        }
-        write(format!("{base}/direction"), "out")?;
-        write(format!("{base}/value"), "0")?;
-        sleep(Duration::from_secs(1));
-        write(format!("{base}/value"), "1")?;
-
-        let wait_port = |t: Duration| -> std::io::Result<()> {
-            let deadline = Instant::now() + t;
-            while !std::path::Path::new(port).exists() {
-                if Instant::now() > deadline {
-                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("{port} did not appear")));
-                }
-                sleep(Duration::from_millis(100));
-            }
-            Ok(())
-        };
-        // Bootloader up (USB CDC enumeration for the toolhead).
-        sleep(Duration::from_millis(500));
-        wait_port(Duration::from_secs(10))?;
-        let mut link = cc_transport::serial::SerialLink::open(port, baud)?;
-        link.send(&[b'a'; 16])?;
-        drop(link);
-        // Application up; the USB toolhead drops and re-creates ttyACM0.
-        sleep(Duration::from_secs(if self == Target::Toolhead { 3 } else { 1 }));
-        wait_port(Duration::from_secs(10))
-    }
-
-    /// Open the link. For the DSP, `restart_dsp` allows a remoteproc restart
-    /// when another host attached to it earlier in this boot.
-    #[cfg(target_os = "linux")]
-    pub fn open(self, restart_dsp: bool) -> std::io::Result<Box<dyn cc_transport::Link>> {
-        use cc_transport::serial::SerialLink;
-        Ok(match self {
-            Target::Dsp => Box::new(cc_transport::dsp::DspLink::open(restart_dsp, std::time::Duration::from_secs(5))?),
-            _ => {
-                let (port, baud) = self.port().unwrap();
-                Box::new(SerialLink::open(port, baud)?)
-            }
-        })
     }
 }

@@ -24,9 +24,9 @@ tap = "reset_toolhead"
 [[widget]]
 type = "button"
 at = [348, 36, 126, 52]
-text = "Reset load cell"
+text = "Restart all"
 font = "small"
-tap = "reset_load_cell"
+tap = "restart"
 
 [[widget]]
 type = "panel"

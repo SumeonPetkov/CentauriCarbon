@@ -26,6 +26,8 @@ big = { file = "fonts/DejaVuSans-Bold.ttf", size = 28 }
 [icons]
 home = { file = "icons/home.png", tint = "dim" }
 home_on = { file = "icons/home.png", tint = "accent" }
+files = { file = "icons/files.png", tint = "dim" }
+files_on = { file = "icons/files.png", tint = "accent" }
 control = { file = "icons/control.png", tint = "dim" }
 control_on = { file = "icons/control.png", tint = "accent" }
 tools = { file = "icons/tools.png", tint = "dim" }

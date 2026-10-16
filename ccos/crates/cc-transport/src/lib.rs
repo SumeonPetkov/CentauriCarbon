@@ -24,6 +24,11 @@ pub trait Link: Send {
     /// Receive whatever is available, waiting at most `timeout`.
     /// Returns 0 on timeout.
     fn recv(&mut self, buf: &mut [u8], timeout: Duration) -> io::Result<usize>;
+    /// File descriptor that becomes readable when data arrives, for callers
+    /// that wait on several links with one `poll()`.
+    fn fd(&self) -> Option<i32> {
+        None
+    }
 }
 
 /// In-memory loopback, handy for tests and the simulator.

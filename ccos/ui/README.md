@@ -18,6 +18,7 @@ Workflow:
 
 ```sh
 # edit a .toml file, then
+cargo run --release -p ccsim                          # try it live in the emulator
 cargo run --release -p ccos -- preview /tmp/screens   # PNG of every screen, on your PC
 cargo build --release --target armv7-unknown-linux-musleabihf -p ccos   # printer binary
 ```
@@ -62,9 +63,10 @@ until you handle it in Rust — which is the point: nothing on screen can be
 silently unconnected.
 
 * `Value::YourName` → add a case to `Model::text` (and `Model::level` for bars)
-  in `crates/ccos/src/app.rs`.
+  in `crates/ccos/src/app.rs` (fill it from the core in `Core::publish`,
+  `crates/ccos/src/core.rs`, or from the G-code thread).
 * `Flag::YourName` → add a case to `Model::flag` in the same file.
-* `Cmd::YourName` → handle it in the `match c` in `crates/ccos/src/main.rs`.
+* `Cmd::YourName` → handle it in `Runtime::command` in `crates/ccos/src/runtime.rs`.
 
 ## theme.toml
 

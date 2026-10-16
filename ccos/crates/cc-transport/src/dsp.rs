@@ -286,6 +286,10 @@ impl Drop for DspLink {
 }
 
 impl Link for DspLink {
+    fn fd(&self) -> Option<i32> {
+        Some(self.ept_fd.as_raw_fd())
+    }
+
     fn send(&mut self, data: &[u8]) -> io::Result<()> {
         if data.is_empty() || data.len() > ring::MAX_WRITE {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad write size"));

@@ -1,0 +1,47 @@
+# Safety: every protection layer, triggered on purpose.
+option speed 10
+wait_until links == 3 timeout 20
+
+# 1. Broken thermistor wire: the toolhead MCU's ADC range check fires.
+inject hotend_thermistor_open
+wait_until mcu_shutdown ~ "ADC out of range" timeout 5
+wait_until shutdown ~ "ADC out of range" timeout 2
+expect nozzle_pwm == 0
+screenshot shots/shutdown.png
+clear hotend_thermistor_open
+tap "Restart"
+wait_until links == 3 timeout 20
+wait_until mcu_shutdown == "none" timeout 5
+expect shutdown == "none"
+
+# 2. Heater cartridge dead: host-side verify_heater stops everything
+#    (check_gain_time 20 s is host time, not sped up).
+inject hotend_heater_dead
+gcode M104 S200
+wait_until shutdown ~ "not heating at expected rate" timeout 40
+wait_until mcu_shutdown ~ "Command request" timeout 2
+expect nozzle_pwm == 0
+expect nozzle < 30
+clear hotend_heater_dead
+command restart
+wait_until links == 3 timeout 20
+expect shutdown == "none"
+
+# 3. USB cable pulled while heating: the MCU turns the heater off by itself
+#    when updates stop (max_duration), and ccos notices the silence.
+gcode M104 S180
+wait_until nozzle > 60 timeout 30
+inject toolhead_unplugged
+wait_until mcu_shutdown ~ "Missed scheduling of next digital out event" timeout 5
+expect nozzle_pwm == 0
+wait_until shutdown ~ "no response" timeout 10
+clear toolhead_unplugged
+command restart
+wait_until links == 3 timeout 20
+expect mcu_shutdown == "none"
+
+# 4. Moves before homing are refused, nothing moves.
+gcode G1 X50 F3000
+wait 0.5
+expect status ~ "Must home axis first"
+expect lost_steps == 0

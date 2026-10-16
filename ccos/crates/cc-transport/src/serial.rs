@@ -65,6 +65,10 @@ impl SerialLink {
 }
 
 impl Link for SerialLink {
+    fn fd(&self) -> Option<i32> {
+        Some(self.fd.as_raw_fd())
+    }
+
     fn send(&mut self, mut data: &[u8]) -> io::Result<()> {
         while !data.is_empty() {
             let n = unsafe { libc::write(self.fd.as_raw_fd(), data.as_ptr() as _, data.len()) };

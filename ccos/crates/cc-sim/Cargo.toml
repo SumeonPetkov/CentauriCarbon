@@ -1,0 +1,10 @@
+[package]
+name = "cc-sim"
+description = "Virtual Elegoo Centauri Carbon: firmware-accurate Klipper MCUs on ptys plus printer physics (PC only)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cc-proto = { workspace = true }
+libc = { workspace = true }

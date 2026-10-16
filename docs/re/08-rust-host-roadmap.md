@@ -39,16 +39,18 @@ hardware.
 | `cc-transport` | yes | Serial (termios; hang-up detection) and the DSP shared-memory link (once-per-boot handshake, remoteproc restart, kbuf alloc/free, DSP log). Ring logic tested against a simulated DSP; serial tested on a pty; **DSP device ioctls untested on hardware**. |
 | `cc-ui` | yes | Canvas, baked-font text, icons, framebuffer (dirty rects), evdev touch, screen engine, tiny PNG writer. |
 | `cc-ui-codegen` | no (build only) | `ui/*.toml` + TTF + PNG → static Rust. Validates everything with readable errors. |
-| `ccos` | yes | The app: touchscreen UI, MCU worker thread (bed/chamber/nozzle thermistors, chamber light, hotend fan, probe, power-cycle), CLI tools. End-to-end tested against a fake Klipper MCU on a pty. |
+| `ccos` | yes | The app: touchscreen UI, printer core (MCU sessions with windowed send queue and clock sync, Klipper look-ahead planner, CoreXY step generation + compression, PID heaters with `verify_heater`, homing via trsync, G-code interpreter, file printing), CLI tools. Printing is tested end to end in `ccsim`; **locked off on real hardware** (see below). |
+| `cc-sim`, `ccsim` | no (PC) | The [emulator](09-emulator.md): firmware-accurate virtual MCUs on ptys, physics model of the machine, window and test scripts. |
 | `ccres`, `cc-res`, `cc-gui` | no (PC tools) | Stock UI resources (`widget.bin`, `translation.bin`), MCU update images, protocol encode/decode, stock-screen previews. |
 
-![home](img/ccos_home.png) ![control](img/ccos_control.png)
-![tools](img/ccos_tools.png) ![system](img/ccos_system.png)
+![home](img/ccos_home.png) ![print](img/ccos_print.png)
+![control](img/ccos_control.png) ![tools](img/ccos_tools.png) ![system](img/ccos_system.png)
 
-`ccos` drives only **read-only sensors, the chamber light and the hotend
-cooling fan** (on from 50 °C, off below 45 °C, like the stock `heater_fan`)
-today. G-code buttons are wired through but report "not executed" until a
-printer core exists.
+On the real printer `ccos` drives only **read-only sensors, the chamber light
+and the hotend cooling fan** (on from 50 °C, off below 45 °C, like the stock
+`heater_fan`) unless `CCOS_ENABLE_MOTION=1` is set. The printing core —
+heaters, motors, homing, file printing — runs and is tested in the emulator,
+but has never moved a real printer.
 
 ## Compared with COSMOS
 
@@ -61,38 +63,36 @@ Until `ccos` prints, use COSMOS or the patched stock firmware for real jobs.
 
 ## What a printing host still needs
 
-In dependency order. Each step is testable on its own.
+In dependency order. Steps 2–6 and 9 now exist and pass the emulator's
+end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
 
 1. **On-device validation of the links** — run `ccos probe all` with the stock
    app stopped. Expect fixes around the DSP restart path (where remoteproc loads
    the image from) and the bootloader timing of the STM32 boards.
-2. **Windowed, clock-scheduled send queue** — port `serialqueue.c` semantics:
-   `receive_window` 192 bytes, retransmit on NAK/timeout, per-command
-   `min_clock`/`req_clock`, notify ids. Clock sync (`clocksync.cpp`):
-   periodic `get_clock`, linear regression → `ClockEstimate`.
-3. **MCU configuration from a config file** — keep `printer.cfg` syntax so
-   stock calibrations carry over; compute the config CRC; handle
-   `is_config`/`crc` on reconnect.
-4. **Heaters + safety first** — ADC → thermistor → PID → `queue_digital_out` /
-   `queue_pwm_out` with MCU-side `max_duration`, plus `verify_heater` runaway
-   checks. Nothing else should be enabled before this is solid; the bed is
-   mains-powered through an SSR.
-5. **Steppers** — `config_stepper`, `queue_step`, `set_next_step_dir`,
-   `reset_step_clock`; a step compressor equivalent to `stepcompress.c`. This is
-   the hot path: run it on a `SCHED_FIFO` thread pinned to one A7 core, with
-   no allocation. Linking Elegoo's C (`stepcompress.c`, `itersolve.c`,
-   `trapq.c`, `kin_*.c`) through FFI is a valid first step.
-6. **Kinematics & planning** — trapezoid queue, lookahead (`toolhead.cpp`),
-   CoreXY, extruder with pressure advance, input shaper (`kin_shaper.c`).
-7. **TMC2209 over UART** (`tmcuart_send`), StallGuard homing on X/Y,
-   `trsync`/`endstop_home` for Z.
+2. ✅ **Windowed, clock-scheduled send queue** (`mcu.rs`) and **clock sync**.
+3. **MCU configuration from a config file** — today the machine is described
+   in `machine.rs` (from the stock `printer.cfg`); reading `printer.cfg` so
+   stock calibrations carry over, and the config CRC, are still to do.
+4. ✅ **Heaters + safety** (`heater.rs`): PID, soft PWM with MCU-side
+   `max_duration`, ADC range limits, `verify_heater`. Each layer is triggered
+   on purpose in `sim/scripts/04_faults.ccsim`. The bed is mains-powered
+   through an SSR: validate on hardware with care.
+5. ✅ **Steppers** (`motion/stepper.rs`): closed-form step times, compression
+   within 25 µs, direction changes, `reset_step_clock`, move-queue slot
+   accounting. Still to do on the device: run the I/O thread `SCHED_FIFO`.
+6. ✅ **Kinematics & planning** (`motion/planner.rs`): Klipper's look-ahead,
+   CoreXY. Pressure advance and input shaping are still missing.
+7. **TMC2209 over UART** (`tmcuart_send`) — needed before X/Y StallGuard
+   homing can work on the real machine. Homing itself (trsync,
+   `endstop_home`, `stepper_stop_on_trigger`) is done and emulator-tested.
 8. **Load-cell probing** — the hard, Centauri-specific part: HX711/HX717
    streaming from the bed MCU, filters (`strain_gauge*.cpp`, `filter.cpp`,
    `tiny_ekf`), trigger detection, bed mesh with bicubic/lagrange interpolation.
    Port by reading Elegoo's C++ closely; COSMOS's load-cell work is a second
    reference.
-9. **G-code front end** — parser, file printing, pause/resume, power-loss
-   resume (`break_save`), print stats, thumbnails from G-code headers.
+9. ✅ **G-code front end** (`gcode.rs`): the common G/M codes, arcs, file
+   printing, pause/resume/cancel. Still missing: power-loss resume
+   (`break_save`), thumbnails, Klipper-style macros.
 10. **Network** — Moonraker-compatible HTTP/websocket API (works with
     OrcaSlicer, Mainsail, Fluidd) and/or SDCP (websocket on :3030, UDP
     discovery on :3000; documented in OpenCentauri `docs/software/api.md`).
@@ -101,8 +101,9 @@ In dependency order. Each step is testable on its own.
 
 ## Safety
 
-Heaters and motion are physical. Until steps 2–4 are done and tested, `ccos`
-never configures heaters or motors — the only outputs it configures are the
-chamber light and the hotend cooling fan. Keep it that way while
-experimenting, and keep a way back to the stock `app` (it stays on disk; a
-reboot restores it unless you change the init scripts).
+Heaters and motion are physical. On the real printer `ccos` configures only
+the chamber light and the hotend cooling fan unless you set
+`CCOS_ENABLE_MOTION=1` — don't, until the TMC2209 setup exists and each
+piece has been validated on the machine with someone watching it. Keep a way
+back to the stock `app` (it stays on disk; a reboot restores it unless you
+change the init scripts).

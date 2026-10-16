@@ -1,0 +1,34 @@
+# Heaters (PID through soft PWM with MCU max_duration), then homing:
+# X/Y against the frame via the TMC stall outputs, Z on the bed contact pin.
+option speed 10
+wait_until links == 3 timeout 20
+gcode M104 S200\nM140 S60
+wait_until nozzle > 150 timeout 60
+expect hotend_fan == 1
+wait_until host_nozzle > 197 timeout 60
+expect nozzle_max < 215
+gcode G28
+wait_until homed == "xyz" timeout 60
+wait_until status == "Homed" timeout 30
+# ccos's idea of the position must match the machine's
+expect x > 127.9
+expect x < 128.1
+expect y > 127.9
+expect y < 128.1
+expect z > 4.95
+expect z < 5.05
+wait 0.3
+expect host_z > 4.95
+expect push_z < 0.05
+expect lost_steps == 0
+gcode G1 X10 Y20 F12000\nG1 Z0.5 F600
+wait 3
+expect x > 9.99
+expect x < 10.01
+expect y > 19.99
+expect y < 20.01
+expect z > 0.49
+expect z < 0.51
+expect mcu_shutdown == "none"
+expect shutdown == "none"
+screenshot shots/heated.png

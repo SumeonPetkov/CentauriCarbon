@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cc-proto", "crates/cc-transport", "crates/cc-res", "crates/cc-gui", "crates/cc-ui", "crates/cc-ui-codegen", "crates/ccos", "crates/ccres"]
+members = ["crates/cc-proto", "crates/cc-transport", "crates/cc-res", "crates/cc-gui", "crates/cc-ui", "crates/cc-ui-codegen", "crates/ccos", "crates/ccres", "crates/cc-sim", "crates/ccsim"]
 
 [workspace.package]
 version = "0.1.0"

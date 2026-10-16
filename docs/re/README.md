@@ -17,11 +17,13 @@ verified on real hardware is marked as such.
 | [06-gcode.md](06-gcode.md) | Custom G-codes (M8xxx config editing, `ROOT`, strain-gauge homing…) |
 | [07-building.md](07-building.md) | What can be built from this repo and what's missing |
 | [08-rust-host-roadmap.md](08-rust-host-roadmap.md) | `ccos`: what exists, design choices, what a full printing host still needs |
+| [09-emulator.md](09-emulator.md) | `ccsim`: the dev emulator — virtual MCUs and machine, test scripts |
 | [mcu-command-table.md](mcu-command-table.md) | All 115 MCU messages with their ids |
 
 The Rust code that comes out of this work lives in [`/ccos`](../../ccos):
 `ccos` (the lightweight on-printer host with an English UI compiled into the
-binary) and `ccres` (PC tool for the stock UI resources and MCU images).
+binary), `ccsim` (a PC emulator of the printer to develop and test ccos
+against) and `ccres` (PC tool for the stock UI resources and MCU images).
 
 ## One-page summary
 

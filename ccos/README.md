@@ -14,36 +14,55 @@ especially [08 — ccos](../docs/re/08-rust-host-roadmap.md).
 
 ![home screen](../docs/re/img/ccos_home.png)
 
-**Status:** talks to all three MCUs (DSP, toolhead, bed board), shows live
-bed/chamber/nozzle temperatures, switches the chamber light, runs the hotend
-fan above 50 °C, probes and resets the MCUs. It does **not** print yet: no
-heaters, no motion (see the roadmap). The device-facing code follows Elegoo's
-source and OpenCentauri's working tools but has **not yet been run on a
-printer**.
+**Status:** ccos contains a complete printing core — MCU sessions with clock
+sync, Klipper's look-ahead planner, CoreXY step generation and compression,
+PID heaters with runaway protection, homing, a G-code interpreter, file
+printing with pause/resume/cancel — and prints in the **emulator**
+([`ccsim`](../docs/re/09-emulator.md)), where end-to-end tests check heating,
+homing, printed geometry and every safety shutdown. On the **real printer**
+it has not been run yet, and heaters/motors stay locked
+(`CCOS_ENABLE_MOTION=1` unlocks them — don't, see the roadmap): there it
+shows live temperatures, switches the light, runs the hotend fan above
+50 °C and probes/resets the MCUs.
 
 ## Layout
 
 | Path | Ships to printer | What |
 |---|---|---|
 | `ui/` | compiled in | Theme, screens, fonts, icons — [how to edit](ui/README.md) |
-| `crates/ccos` | ✓ | The app: UI loop, MCU worker, CLI tools |
+| `crates/ccos` | ✓ | The app: UI runtime, printer core (planner, steps, heaters, homing), G-code, CLI tools |
 | `crates/cc-ui` | ✓ | UI runtime: canvas, baked fonts, icons, framebuffer, touch, screen engine |
 | `crates/cc-proto` | ✓ | Klipper protocol with the printer's fixed message table, zero-alloc |
 | `crates/cc-transport` | ✓ | Serial links and the R528 DSP shared-memory link |
 | `crates/cc-ui-codegen` | build only | `ui/` → static Rust |
+| `crates/cc-sim`, `crates/ccsim` | PC only | The emulator: virtual MCUs + machine, window, test scripts ([docs](../docs/re/09-emulator.md)) |
+| `sim/` | PC only | Emulator test scripts and sample G-code |
 | `crates/ccres`, `cc-res`, `cc-gui` | PC only | Tools for the **stock** UI resources and MCU firmware images |
 
 ## Build
 
 ```sh
 rustup target add armv7-unknown-linux-musleabihf
-cargo test --release --workspace --all-features     # 63 tests
+cargo test --release --workspace --all-features     # unit tests + emulator scenarios (~4 min)
 cargo build --release --target armv7-unknown-linux-musleabihf -p ccos
 # -> target/armv7-unknown-linux-musleabihf/release/ccos
 cargo run --release -p ccos -- preview /tmp/screens  # render every screen on your PC
 ```
 
 No cross C toolchain is needed (linked with `rust-lld`, see `.cargo/config.toml`).
+
+## Try it without a printer
+
+```sh
+cargo run --release -p ccsim                    # window: the LCD (click = touch) + bed view
+cargo run --release -p ccsim -- --speed 10      # heaters 10x faster
+cargo run --release -p ccsim -- sim/scripts/03_print_cube.ccsim   # a scripted test, headless
+```
+
+The Print screen lists `cube_20mm.gcode` and two other samples; put your own
+files in the G-code folder ccsim prints at start-up (or pass `--gcode-dir`).
+`ccsim --help` lists every script command and value. Build without the
+window (no X11) with `--no-default-features`.
 
 ## Run on the printer
 

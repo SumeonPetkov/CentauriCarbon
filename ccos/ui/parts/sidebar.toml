@@ -3,7 +3,7 @@
 
 [[widget]]
 type = "toggle"
-at = [4, 4, 60, 62]
+at = [4, 2, 60, 52]
 icon = "home"
 icon_on = "home_on"
 on_if = "@home"
@@ -12,7 +12,16 @@ tap = "goto home"
 
 [[widget]]
 type = "toggle"
-at = [4, 72, 60, 62]
+at = [4, 56, 60, 52]
+icon = "files"
+icon_on = "files_on"
+on_if = "@print"
+bg = "none"
+tap = "goto print"
+
+[[widget]]
+type = "toggle"
+at = [4, 110, 60, 52]
 icon = "control"
 icon_on = "control_on"
 on_if = "@control"
@@ -21,7 +30,7 @@ tap = "goto control"
 
 [[widget]]
 type = "toggle"
-at = [4, 140, 60, 62]
+at = [4, 164, 60, 52]
 icon = "tools"
 icon_on = "tools_on"
 on_if = "@tools"
@@ -30,7 +39,7 @@ tap = "goto tools"
 
 [[widget]]
 type = "toggle"
-at = [4, 208, 60, 62]
+at = [4, 218, 60, 52]
 icon = "settings"
 icon_on = "settings_on"
 on_if = "@system"

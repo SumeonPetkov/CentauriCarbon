@@ -1,0 +1,17 @@
+[package]
+name = "ccsim"
+description = "Dev emulator: ccos running against a virtual Centauri Carbon, in a window or from test scripts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["window"]
+# Desktop window (X11 via minifb). Without it ccsim runs headless only.
+window = ["dep:minifb"]
+
+[dependencies]
+cc-sim = { path = "../cc-sim" }
+cc-ui = { path = "../cc-ui" }
+ccos = { path = "../ccos" }
+minifb = { version = "0.27", optional = true, default-features = false, features = ["x11"] }
