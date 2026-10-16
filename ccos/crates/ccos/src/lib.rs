@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod clock;
+pub mod config;
 pub mod core;
 pub mod gcode;
 pub mod heater;

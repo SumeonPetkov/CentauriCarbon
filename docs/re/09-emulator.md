@@ -62,8 +62,9 @@ cover. The toolhead link is throttled to 100 kB/s and the load-cell board to
   steps to a disabled driver are lost (and counted).
 * Frame limits: pushing past them slips the belt (position is lost, as on the
   real machine) and asserts the TMC2209 DIAG output (`!PG4`, `!PF6`) used for
-  StallGuard homing; the Z endstop `PG8` closes when the nozzle touches the
-  bed.
+  StallGuard homing; the Z endstop `PG8` (a separate sensor, not the load
+  cells) closes 4.5 mm before the nozzle reaches the bed, which is
+  `position_endstop_extra` in `printer.cfg`.
 * Heaters as lumped thermal masses (hotend ≈ 60 W, bed ≈ 350 W, chamber
   coupled to the bed; the part fan cools the hotend), NTC 100K thermistors
   (β 4300 / 3950) on 4.7 kΩ pull-ups into 12-bit ADCs with noise.
@@ -91,11 +92,16 @@ The emulator needed — and drove — the printing core:
 * `motion/planner.rs`: Klipper's look-ahead (junction deviation, smoothed
   acceleration), `motion/stepper.rs`: closed-form step times per move phase
   and `queue_step` compression within 25 µs.
-* `heater.rs`: Klipper's PID and `verify_heater`; heater outputs with
-  `max_duration` 3 s; ADC range limits from `min_temp`/`max_temp`.
-* `core.rs`, `gcode.rs`: I/O thread + G-code thread, homing through
-  trsync/endstop/`stepper_stop_on_trigger`, file printing with
-  pause/resume/cancel, M104/M140 applied in step with the motion queue.
+* `heater.rs`: the stock PID (1 s derivative smoothing), `verify_heater`
+  (including the < −20 °C thermistor check), autotune; heater outputs with
+  `max_duration` 5 s; ADC range limits from `min_temp`/`max_temp`.
+* `core.rs`, `gcode/`: I/O thread + G-code thread, homing through
+  trsync/endstop/`stepper_stop_on_trigger`. The G-code interpreter is a
+  port of the stock one: parser, commands, scripts, file pipeline, M8xxx.
+  See [10](10-gcode.md).
+* `config.rs`: the stock ConfigParser; `printer.cfg`, `user_printer.cfg`
+  and `unmodifiable.cfg` are read from `CCOS_CONFIG_DIR` (the emulator
+  seeds `<dir>/board-resource` with the stock files).
 * `runtime.rs`: the UI loop independent of `/dev/fb0`, shared by the device
   and the emulator. New Print screen (`ui/screens/print.toml`).
 
@@ -106,10 +112,11 @@ The emulator needed — and drove — the printing core:
 | Script | Checks |
 |---|---|
 | `01_connect_ui` | power-cycle + bootloader release, live temperatures, taps, light |
-| `02_heat_home` | PID heating, hotend fan at 50 °C, homing X/Y on stall and Z on bed contact, positions agree with the machine to < 0.02 mm |
-| `03_print_cube` | prints `cube_20mm.gcode` from the Print screen: 6 layers, bounding box, no cold extrusion, no lost steps, end G-code turns everything off |
-| `04_faults` | open thermistor → MCU *ADC out of range*; dead heater → host *not heating at expected rate*; USB unplugged → MCU *Missed scheduling…* then host *no response*; restart after each; unhomed move refused |
+| `02_heat_home` | PID heating, hotend fan at 50 °C, the stock G28: X/Y twice on stall, Z twice on PG8 at (130, 130), ends at Z 14.35; `G28 X Y` ends at X18 Y17.5; machine and host agree; moves past a limit are clamped |
+| `03_print_cube` | prints `cube_20mm.gcode` from the Print screen: CUSTOM_ZERO instead of the first G28, `;LAYER:` counting, 6 layers 0.15 mm above commanded (no bed mesh), bounding box, no cold extrusion, no lost steps, end G-code turns everything off |
+| `04_faults` | open thermistor → host *thermistor fault* (stock `min_temp` is −200, so the MCU range check cannot fire); dead heater → *not heating at expected rate*; USB unplugged → MCU *Missed scheduling…* then host *no response*; restart after each; unhomed move silently dropped; out-of-range target only warned |
 | `05_stress` | G2 arcs and a 300 mm/s zig-zag while 1 in 2000 bytes are corrupted: retransmits happen, nothing is lost or late |
+| `06_gcode_parity` | stock parser/console behaviour (unknown commands, M21 silent, range error text, upper-casing), M106 P/S rules, SET_LED TRANSMIT, the ROOT gate in a file, PAUSE/RESUME/CANCEL_PRINT during a print |
 
 Example:
 
@@ -131,5 +138,8 @@ bedshot shots/cube_bed.png
 * No TMC2209 UART model: DIAG behaves like ideal StallGuard. On the real
   printer ccos would first have to configure the drivers over `tmcuart`.
 * No load-cell model (bed mesh, probing) and no input shaping/pressure
-  advance in ccos yet.
+  advance in ccos yet (phase 2 of [10](10-gcode.md)).
+* The `console` probe reads a process-wide ring of the last 256 console
+  lines; when scripts run in parallel (`cargo test`), use text unique to
+  the script.
 * The DSP's shared-memory transport is not emulated (the DSP is a pty).

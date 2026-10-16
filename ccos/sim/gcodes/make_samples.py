@@ -52,8 +52,9 @@ def footer():
     ]
 
 
-def square_layer(cx, cy, size, z, loops, speed):
-    out = [f"; layer z={z:.2f}", f"G1 Z{z:.2f} F600", "G1 E0.8 F2400 ; unretract"]
+def square_layer(cx, cy, size, z, loops, speed, layer):
+    # ElegooSlicer style marker: ccos (like the stock firmware) counts layers from it
+    out = [f";LAYER:{layer}", f"; layer z={z:.2f}", f"G1 Z{z:.2f} F600", "G1 E0.8 F2400 ; unretract"]
     for k in range(loops):
         h = size / 2 - k * 0.45
         pts = [(cx - h, cy - h), (cx + h, cy - h), (cx + h, cy + h), (cx - h, cy + h), (cx - h, cy - h)]
@@ -68,7 +69,7 @@ def cube():
     lines = header("20 mm hollow cube, 5 layers", 210, 60)
     lines.append("M106 S180")
     for i in range(5):
-        lines += square_layer(128, 128, 20, 0.2 + i * 0.2, 2, 120)
+        lines += square_layer(128, 128, 20, 0.2 + i * 0.2, 2, 120, i + 1)
     return lines + footer()
 
 
@@ -77,7 +78,7 @@ def disc():
     lines = header("Arc test: 3 rings with G2/G3, 3 layers", 210, 0)
     for i in range(3):
         z = 0.2 + i * 0.2
-        lines += [f"G1 Z{z:.2f} F600", "G1 E0.8 F2400"]
+        lines += [f";LAYER:{i + 1}", f"G1 Z{z:.2f} F600", "G1 E0.8 F2400"]
         for r in (10, 15, 20):
             lines.append(f"G1 X{100 + r} Y100 F12000")
             circ = 2 * math.pi * r
@@ -89,7 +90,7 @@ def disc():
 def speedtest():
     """Fast zig-zag travel + extrusion to stress step generation."""
     lines = header("Speed test: 300 mm/s zig-zag, 1 layer", 210, 0)
-    lines += ["G1 Z0.2 F600", "G1 E0.8 F2400", "G1 X40 Y40 F18000"]
+    lines += [";LAYER:1", "G1 Z0.2 F600", "G1 E0.8 F2400", "G1 X40 Y40 F18000"]
     y = 40.0
     for i in range(30):
         x = 200.0 if i % 2 == 0 else 40.0
@@ -100,6 +101,6 @@ def speedtest():
 
 
 for name, fn in [("cube_20mm.gcode", cube), ("arc_rings.gcode", disc), ("speed_zigzag.gcode", speedtest)]:
-    with open(name, "w") as f:
+    with open(name, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(fn()) + "\n")
     print(name)

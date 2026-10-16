@@ -16,8 +16,9 @@ especially [08 — ccos](../docs/re/08-rust-host-roadmap.md).
 
 **Status:** ccos contains a complete printing core — MCU sessions with clock
 sync, Klipper's look-ahead planner, CoreXY step generation and compression,
-PID heaters with runaway protection, homing, a G-code interpreter, file
-printing with pause/resume/cancel — and prints in the **emulator**
+PID heaters with runaway protection, homing, file printing with
+pause/resume/cancel, and a G-code interpreter that behaves like the stock
+firmware's ([parity notes](../docs/re/10-gcode.md)). It prints in the **emulator**
 ([`ccsim`](../docs/re/09-emulator.md)), where end-to-end tests check heating,
 homing, printed geometry and every safety shutdown. On the **real printer**
 it has not been run yet, and heaters/motors stay locked

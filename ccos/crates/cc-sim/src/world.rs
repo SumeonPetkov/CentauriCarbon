@@ -86,7 +86,9 @@ impl Default for WorldConfig {
             x_limits: (-2.0, 256.5),
             y_limits: (-2.5, 270.0),
             z_limits: (0.0, 258.0),
-            z_trigger: 0.0,
+            // PG8 is a separate sensor (not the load cells) that closes with
+            // the bed ~4.5 mm below the nozzle (printer.cfg position_endstop_extra)
+            z_trigger: 4.5,
         }
     }
 }

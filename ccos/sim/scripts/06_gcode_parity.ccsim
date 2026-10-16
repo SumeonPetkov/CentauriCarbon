@@ -1,0 +1,76 @@
+# G-code parity with the stock firmware (docs/re/10-gcode.md): parser
+# quirks, range errors, unknown commands, fans, LEDs, the ROOT gate, and
+# PAUSE / RESUME / CANCEL_PRINT during a print.
+option speed 3
+wait_until links == 3 timeout 20
+
+# unknown commands are logged and skipped; M21 and M105 are silent
+gcode FOO_BAR X=1
+gcode M73 P50
+gcode M21
+wait 0.5
+expect console ~ "unknown command: FOO_BAR"
+expect console ~ "unknown command: M73"
+expect console !~ "unknown command: M21"
+
+# out of range: the stock message (no space after the name), then the default
+gcode M106 S400
+wait 0.5
+expect console ~ "error on M106 S400: Smust have maximum of 255"
+expect part_fan > 0.99
+# P0 is not a fan
+gcode M106 P0 S0
+wait 0.5
+expect part_fan > 0.99
+# traditional lines are upper-cased
+gcode m106 s127.5
+wait 0.5
+expect part_fan > 0.49
+expect part_fan < 0.51
+gcode M107
+wait 0.5
+expect part_fan == 0
+gcode M204
+wait 0.3
+expect console ~ "Invalid M204 commandM204"
+
+# SET_LED: TRANSMIT defaults to 0 (stored, not sent)
+gcode SET_LED_led2 RED=1 TRANSMIT=1
+wait_until light == 1 timeout 2
+gcode SET_LED_led2 RED=0
+wait 0.5
+expect light == 1
+gcode SET_LED_led2 RED=0 TRANSMIT=1
+wait_until light == 0 timeout 2
+
+# ROOT gate: M8xxx in a file only run after ROOT
+print root_gate.gcode
+wait_until print_state == "Finished" timeout 30
+expect console ~ "root gate done"
+expect console !~ "z_offset : 0.31"
+expect console ~ "z_offset : 0.32"
+expect console !~ "z_offset : 0.33"
+# from the screen they always run
+gcode M8233 S0 P0
+wait 0.5
+expect console ~ "z_offset : 0"
+
+# PAUSE / RESUME / CANCEL_PRINT run the stock scripts
+print cube_20mm.gcode
+wait_until layer >= 2 timeout 300
+command pause
+wait_until print_state == "Paused" timeout 30
+wait_until busy == 0 timeout 30
+command resume
+wait_until print_state == "Printing" timeout 60
+wait_until layer >= 3 timeout 120
+command cancel
+wait_until print_state == "Cancelled" timeout 30
+wait_until busy == 0 timeout 30
+wait 1
+expect nozzle_pwm == 0
+expect bed_pwm == 0
+expect cold_extrusion == 0
+expect lost_steps == 0
+expect mcu_shutdown == "none"
+expect shutdown == "none"

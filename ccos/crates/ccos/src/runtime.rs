@@ -12,7 +12,7 @@ use std::thread::JoinHandle;
 use cc_ui::{Action, Canvas, Engine, Rect, Touch};
 
 use crate::app::{Phase, State, Ui};
-use crate::core::{Output, Printer, Shared};
+use crate::core::{Printer, Shared};
 use crate::gcode::{Control, Job};
 use crate::hw::Hardware;
 use crate::ui::{self, Cmd, Flag, Value};
@@ -49,7 +49,11 @@ impl Runtime {
             s.motion_lock = hw.motion_lock();
             s.gcode_dir = hw.gcode_dir.display().to_string();
         }
-        let printer = Printer::new(hw, ui.clone());
+        let cfgs = match &hw.config_dir {
+            Some(d) => crate::config::Configs::load(d),
+            None => crate::config::Configs::stock(),
+        };
+        let printer = Printer::new(hw, cfgs, ui.clone());
         let ctl = Arc::new(Control::default());
         let (tx, rx) = std::sync::mpsc::channel();
         let p1 = printer.clone();
@@ -138,11 +142,10 @@ impl Runtime {
                 self.send(Job::Restart);
             }
             Cmd::ToggleLight => {
-                let mut core = self.printer.lock();
-                let on = core.output(Output::Light) > 0.0;
-                if let Err(e) = core.set_output(Output::Light, if on { 0.0 } else { 1.0 }) {
-                    core.log(format!("light: {e}"));
-                }
+                // the stock UI's "illumination light" switch
+                let on = self.printer.lock().leds[1] > 0.0;
+                let v = if on { 0 } else { 1 };
+                self.send(Job::Gcode(format!("SET_LED_led2 RED={v} GREEN={v} BLUE={v} WHITE={v} TRANSMIT=1")));
             }
             Cmd::BacklightUp | Cmd::BacklightDown => {
                 let mut s = self.ui.lock();
@@ -161,11 +164,13 @@ impl Runtime {
                 };
                 self.print_index(i);
             }
-            Cmd::Pause => self.ctl.pause.store(true, Ordering::Relaxed),
-            Cmd::Resume => self.ctl.pause.store(false, Ordering::Relaxed),
+            // the stock UI's commands
+            Cmd::Pause => self.send(Job::Gcode("PAUSE".into())),
+            Cmd::Resume => self.send(Job::Gcode("RESUME".into())),
             Cmd::Cancel => {
+                // highest priority: ends waits (M109…), then CANCEL_PRINT runs
                 self.ctl.cancel.store(true, Ordering::Relaxed);
-                self.ctl.pause.store(false, Ordering::Relaxed);
+                self.send(Job::Gcode("CANCEL_PRINT".into()));
             }
             Cmd::RefreshFiles => self.send(Job::RefreshFiles),
         }

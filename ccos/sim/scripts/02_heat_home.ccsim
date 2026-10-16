@@ -1,24 +1,48 @@
-# Heaters (PID through soft PWM with MCU max_duration), then homing:
-# X/Y against the frame via the TMC stall outputs, Z on the bed contact pin.
-option speed 10
+# Heaters (PID through soft PWM with MCU max_duration), then G28 exactly as
+# the stock firmware does it: X and Y homed twice each against the frame
+# (TMC stall outputs) with a 20 mm back-off, Z homed twice on the PG8 sensor
+# at (130, 130) and backed off 10 mm.
+# (heaters 3x faster than real: more and the 1 s control latency of the
+# stock firmware's heater loop makes the PID oscillate)
+option speed 3
 wait_until links == 3 timeout 20
 gcode M104 S200\nM140 S60
 wait_until nozzle > 150 timeout 60
 expect hotend_fan == 1
+gcode M109 S200
 wait_until host_nozzle > 197 timeout 60
-expect nozzle_max < 215
+# heaters run 3x faster than real here, so the real-time PID overshoots more
+expect nozzle_max < 225
 gcode G28
 wait_until homed == "xyz" timeout 60
-wait_until status == "Homed" timeout 30
-# ccos's idea of the position must match the machine's
-expect x > 127.9
-expect x < 128.1
-expect y > 127.9
-expect y < 128.1
-expect z > 4.95
-expect z < 5.05
+wait_until busy == 0 timeout 60
 wait 0.3
-expect host_z > 4.95
+# final position: the Z home point (130, 130), Z = E + 10 with
+# E = position_endstop_extra (4.5) - z_offset (0) - fix_z_offset (0.15)
+expect host_x > 129.99
+expect host_x < 130.01
+expect host_y > 129.99
+expect host_y < 130.01
+expect host_z > 14.34
+expect host_z < 14.36
+# the machine agrees: PG8 closes 4.5 mm above the bed, so the gap is z + 0.15
+expect x > 129.95
+expect x < 130.05
+expect y > 129.95
+expect y < 130.05
+expect z > 14.45
+expect z < 14.55
+# G28 X Y alone ends backed off 20 mm from the frame: X -2 + 20, Y -2.5 + 20
+gcode G28 X Y
+wait 1
+wait_until busy == 0 timeout 30
+wait 0.3
+expect host_x > 17.99
+expect host_x < 18.01
+expect host_y > 17.49
+expect host_y < 17.51
+expect x > 17.95
+expect x < 18.05
 expect push_z < 0.05
 expect lost_steps == 0
 gcode G1 X10 Y20 F12000\nG1 Z0.5 F600
@@ -27,8 +51,13 @@ expect x > 9.99
 expect x < 10.01
 expect y > 19.99
 expect y < 20.01
-expect z > 0.49
-expect z < 0.51
+expect z > 0.64
+expect z < 0.66
+# soft limits: a move past the end is clamped, not refused
+gcode G1 X400 F12000
+wait 3
+expect x > 256.4
+expect x < 256.6
 expect mcu_shutdown == "none"
 expect shutdown == "none"
 screenshot shots/heated.png

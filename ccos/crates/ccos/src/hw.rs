@@ -10,6 +10,7 @@
 //! | `CCOS_TOOLHEAD_PORT`, `CCOS_LOADCELL_PORT` | Serial ports of the STM32 boards |
 //! | `CCOS_GPIO_ROOT` | sysfs GPIO directory (power pins) |
 //! | `CCOS_GCODE_DIR` | Where printable files are listed from |
+//! | `CCOS_CONFIG_DIR` | Folder with printer.cfg / user_printer.cfg / unmodifiable.cfg |
 //! | `CCOS_ENABLE_MOTION=1` | Allow heaters and motors on real hardware (see below) |
 //!
 //! **Motion lock.** On the real printer, heaters and motors stay disabled
@@ -40,6 +41,8 @@ pub struct Hardware {
     /// Heaters and motors may be configured.
     pub motion: bool,
     pub gcode_dir: PathBuf,
+    /// `/board-resource`: printer.cfg, user_printer.cfg, unmodifiable.cfg.
+    pub config_dir: Option<PathBuf>,
     /// Talking to `ccsim`: shorter bootloader/USB delays, motion allowed.
     pub simulated: bool,
 }
@@ -58,6 +61,7 @@ impl Hardware {
             restart_dsp,
             motion: false,
             gcode_dir: "/user-resource".into(),
+            config_dir: Some("/board-resource".into()),
             simulated: false,
         }
     }
@@ -75,6 +79,7 @@ impl Hardware {
             restart_dsp: false,
             motion: true,
             gcode_dir: dir.join("gcodes"),
+            config_dir: Some(dir.join("board-resource")),
             simulated: true,
         }
     }
@@ -100,6 +105,9 @@ impl Hardware {
         }
         if let Some(g) = var("CCOS_GCODE_DIR") {
             hw.gcode_dir = g.into();
+        }
+        if let Some(g) = var("CCOS_CONFIG_DIR") {
+            hw.config_dir = Some(g.into());
         }
         if var("CCOS_ENABLE_MOTION").as_deref() == Some("1") {
             hw.motion = true;

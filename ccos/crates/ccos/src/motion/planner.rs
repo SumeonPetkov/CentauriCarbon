@@ -27,7 +27,7 @@ pub struct Limits {
 }
 
 impl Limits {
-    fn junction_deviation(&self) -> f64 {
+    pub fn junction_deviation(&self) -> f64 {
         let scv2 = self.square_corner_velocity * self.square_corner_velocity;
         scv2 * (2f64.sqrt() - 1.0) / self.max_accel
     }
@@ -55,6 +55,8 @@ pub struct Move {
     pub accel_t: f64,
     pub cruise_t: f64,
     pub decel_t: f64,
+    /// Lookahead callbacks fired with this move's end time when it is committed.
+    pub callbacks: Vec<u32>,
 }
 
 impl Move {
@@ -69,7 +71,8 @@ impl Move {
         let mut is_kinematic = true;
         let mut end = end;
         let inv;
-        if move_d < 1e-9 {
+        // Elegoo: 1e-7 (upstream 1e-9)
+        if move_d < 1e-7 {
             // extrude-only move
             end = [start[0], start[1], start[2], end[3]];
             axes_d[0] = 0.0;
@@ -106,6 +109,7 @@ impl Move {
             accel_t: 0.0,
             cruise_t: 0.0,
             decel_t: 0.0,
+            callbacks: Vec::new(),
         }
     }
 
@@ -230,11 +234,13 @@ pub struct Planner {
     /// End of the last committed move (print time).
     pub print_time: f64,
     pub segments: VecDeque<Segment>,
+    /// (callback token, print time) of committed moves' callbacks.
+    pub fired: Vec<(u32, f64)>,
 }
 
 impl Planner {
     pub fn new(lim: Limits) -> Self {
-        Self { lim, queue: VecDeque::new(), junction_flush: LOOKAHEAD_FLUSH_TIME, print_time: 0.0, segments: VecDeque::new() }
+        Self { lim, queue: VecDeque::new(), junction_flush: LOOKAHEAD_FLUSH_TIME, print_time: 0.0, segments: VecDeque::new(), fired: Vec::new() }
     }
 
     pub fn queued(&self) -> usize {
@@ -312,6 +318,10 @@ impl Planner {
             self.print_time = self.print_time.max(now + start_delay);
         }
         for m in self.queue.drain(..flush_count) {
+            let end = self.print_time + m.duration();
+            for cb in &m.callbacks {
+                self.fired.push((*cb, end));
+            }
             if m.move_d <= 0.0 {
                 continue;
             }
@@ -331,10 +341,33 @@ impl Planner {
         }
     }
 
-    /// Wait for nothing: append a pause to the time line (G4 while moving).
-    pub fn dwell(&mut self, secs: f64, now: f64, start_delay: f64) {
+    /// `register_lookahead_callback`: run `token` when the last queued move
+    /// is committed (with its end time); if nothing is queued, returns the
+    /// time to use now (`get_last_move_time`).
+    pub fn lookahead_callback(&mut self, token: u32, now: f64, start_delay: f64) -> Option<f64> {
+        match self.queue.back_mut() {
+            Some(m) => {
+                m.callbacks.push(token);
+                None
+            }
+            None => Some(self.last_move_time(now, start_delay)),
+        }
+    }
+
+    /// `get_last_move_time`: end of the planned time line (after committing
+    /// the look-ahead), or a fresh start point when idle.
+    pub fn last_move_time(&mut self, now: f64, start_delay: f64) -> f64 {
         self.flush(false, now, start_delay);
-        self.print_time = self.print_time.max(now + start_delay) + secs;
+        if self.print_time < now + 0.05 {
+            self.print_time = self.print_time.max(now + start_delay);
+        }
+        self.print_time
+    }
+
+    /// `toolhead.dwell(delay)`: the time line advances by `delay`.
+    pub fn dwell(&mut self, delay: f64, now: f64, start_delay: f64) {
+        let t = self.last_move_time(now, start_delay);
+        self.print_time = t + delay.max(0.0);
     }
 
     /// Drop everything not yet executed (emergency stop, homing stop).

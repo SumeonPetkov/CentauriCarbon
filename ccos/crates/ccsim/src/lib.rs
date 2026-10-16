@@ -24,6 +24,7 @@ pub const SAMPLES: &[(&str, &str)] = &[
     ("cube_20mm.gcode", include_str!("../../../sim/gcodes/cube_20mm.gcode")),
     ("arc_rings.gcode", include_str!("../../../sim/gcodes/arc_rings.gcode")),
     ("speed_zigzag.gcode", include_str!("../../../sim/gcodes/speed_zigzag.gcode")),
+    ("root_gate.gcode", include_str!("../../../sim/gcodes/root_gate.gcode")),
 ];
 
 #[derive(Debug, Clone)]
@@ -88,6 +89,9 @@ pub const QUERIES: &[(&str, &str)] = &[
     ("screen, status, print_state, homed", "what ccos shows (homed: e.g. \"xyz\")"),
     ("print_progress", "0..1"),
     ("links", "number of MCUs ccos is connected to"),
+    ("busy", "1 while ccos executes a command or prints"),
+    ("layer", "current layer as ccos counts it (;LAYER: markers)"),
+    ("console", "the last 256 lines of ccos's G-code console (use ~ / !~)"),
     ("retransmits, naks", "protocol recoveries so far"),
 ];
 
@@ -205,6 +209,9 @@ impl Emu {
             "homed" => Some(Val::Str(['x', 'y', 'z'].iter().zip(s.homed).filter(|(_, h)| *h).map(|(c, _)| *c).collect())),
             "shutdown" => Some(Val::Str(s.shutdown.clone().unwrap_or_else(|| "none".into()))),
             "links" => num(s.links.iter().filter(|l| l.state == ccos::app::LinkState::Ok).count() as f64),
+            "busy" => num(s.busy as u8 as f64),
+            "layer" => num(s.print.layer as f64),
+            "console" => Some(Val::Str(ccos::gcode::console_lines().join("\n"))),
             _ => None,
         }
     }

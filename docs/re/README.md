@@ -18,6 +18,7 @@ verified on real hardware is marked as such.
 | [07-building.md](07-building.md) | What can be built from this repo and what's missing |
 | [08-rust-host-roadmap.md](08-rust-host-roadmap.md) | `ccos`: what exists, design choices, what a full printing host still needs |
 | [09-emulator.md](09-emulator.md) | `ccsim`: the dev emulator — virtual MCUs and machine, test scripts |
+| [10-gcode.md](10-gcode.md) | The ccos G-code interpreter: parity with the stock firmware, command coverage, deliberate differences |
 | [mcu-command-table.md](mcu-command-table.md) | All 115 MCU messages with their ids |
 
 The Rust code that comes out of this work lives in [`/ccos`](../../ccos):
@@ -91,11 +92,11 @@ against) and `ccres` (PC tool for the stock UI resources and MCU images).
 |---|---|---|---|
 | What runs | Elegoo's `app`, patched | Upstream Klipper/Kalico (Python) + Moonraker + web UI | One native Rust binary, ~600 KB |
 | UI | Stock (restyle with `ccres`) | Their screen UI + Mainsail/Fluidd | English UI compiled from `ccos/ui/*.toml` |
-| Prints today | Yes | Yes | **No** — sensors, light, MCU tools only |
+| Prints today | Yes | Yes | **In the emulator** — stock G-code semantics ([10](10-gcode.md)); no bed mesh/probing yet; untested on hardware |
 | Resource use | Stock | Heavy for this board ("very little overhead" per their docs) | Minimal: no interpreter, no parsing at runtime |
 | Effort to extend | Patching binaries | Klipper config/macros | Rust; roadmap in [08](08-rust-host-roadmap.md) |
 
 `ccos` is the route for a host that is as light as possible and fully yours;
-until its printer core exists, COSMOS or the patched stock firmware are what
-actually print. `ccos` runs on top of the OpenCentauri patched firmware: copy
+until it has been proven on a real machine and has bed meshing, COSMOS or the
+patched stock firmware are what actually print. `ccos` runs on top of the OpenCentauri patched firmware: copy
 the binary over SSH, stop `app`, run it. Rebooting brings the stock app back.

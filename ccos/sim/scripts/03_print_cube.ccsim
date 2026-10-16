@@ -1,23 +1,28 @@
-# Print a file from the Print screen and check what came out of the nozzle.
-option speed 20
+# Print a file from the Print screen, through the stock firmware's file
+# pipeline: comments cut at ';', ';LAYER:' markers counted, the first G28
+# replaced by CUSTOM_ZERO (Z homed at the purge position).
+option speed 3
 wait_until links == 3 timeout 20
 goto print
 wait 0.3
 tap "cube_20mm.gcode"
 wait_until print_state == "Printing" timeout 5
-wait_until layers >= 2 timeout 120
+wait_until layers >= 2 timeout 240
 screenshot shots/printing.png
-wait_until print_state == "Finished" timeout 180
+wait_until print_state == "Finished" timeout 300
+expect layer == 5
 # prime line (x 10..60 at y 5) + the 20 mm cube centred at 128,128
-expect layers == 6
 expect bbox_x0 > 9.9
 expect bbox_x0 < 10.1
 expect bbox_x1 > 137.9
 expect bbox_x1 < 138.3
 expect bbox_y1 > 137.9
 expect bbox_y1 < 138.3
-expect max_z > 0.99
-expect max_z < 1.01
+# 6 heights: prime line + 5 layers; with no bed mesh the nozzle sits
+# fix_z_offset (0.15) higher than commanded, like the stock firmware
+expect layers == 6
+expect max_z > 1.14
+expect max_z < 1.16
 expect cold_extrusion == 0
 expect lost_steps == 0
 expect push_x < 0.05

@@ -1,7 +1,7 @@
 # Step pipeline under stress: G2 arcs, 300 mm/s zig-zag at 20000 mm/s²,
 # and 1 in 2000 bytes from the host corrupted on the wire (frames are
 # NAKed/retransmitted; nothing may be lost or late).
-option speed 20
+option speed 3
 option corrupt 0.0005
 wait_until links == 3 timeout 30
 print arc_rings.gcode

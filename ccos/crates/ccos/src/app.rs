@@ -47,6 +47,8 @@ pub struct PrintInfo {
     pub started: Option<Instant>,
     pub elapsed: f64,
     pub error: String,
+    pub layer: u32,
+    pub total_layers: u32,
 }
 
 pub struct State {
@@ -72,6 +74,8 @@ pub struct State {
     pub gcode_dir: String,
     pub shutdown: Option<String>,
     pub motion_lock: Option<&'static str>,
+    /// The G-code thread is executing something.
+    pub busy: bool,
     /// Mirror log lines to stderr.
     pub echo: bool,
 }
@@ -100,6 +104,7 @@ impl Default for State {
             gcode_dir: String::new(),
             shutdown: None,
             motion_lock: None,
+            busy: false,
             echo: true,
         }
     }

@@ -90,9 +90,14 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
    `tiny_ekf`), trigger detection, bed mesh with bicubic/lagrange interpolation.
    Port by reading Elegoo's C++ closely; COSMOS's load-cell work is a second
    reference.
-9. ✅ **G-code front end** (`gcode.rs`): the common G/M codes, arcs, file
-   printing, pause/resume/cancel. Still missing: power-loss resume
-   (`break_save`), thumbnails, Klipper-style macros.
+9. ✅ **G-code interpreter** (`gcode/`, `config.rs`): a port of the stock
+   one. It has the same parser, the full command set the Centauri Carbon
+   loads, and the same defaults, range checks and internal scripts (G28,
+   PAUSE/RESUME, M600, PID_CALIBRATE…). It also covers the file pipeline,
+   the ROOT gate and M8000–M8826 on the stock config files. Coverage and
+   deliberate differences: [10](10-gcode.md). Commands whose subsystem
+   (items 6–8, power-loss resume `break_save`) is missing are accepted and
+   reported as such.
 10. **Network** — Moonraker-compatible HTTP/websocket API (works with
     OrcaSlicer, Mainsail, Fluidd) and/or SDCP (websocket on :3030, UDP
     discovery on :3000; documented in OpenCentauri `docs/software/api.md`).
