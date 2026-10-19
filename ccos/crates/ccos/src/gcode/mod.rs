@@ -21,6 +21,7 @@ mod cmds;
 mod home;
 mod para;
 mod print;
+mod tmc;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -133,6 +134,8 @@ pub struct Exec {
     mesh_enabled: bool,
     /// Not-yet-available commands already reported once.
     reported: std::collections::HashSet<&'static str>,
+    /// `[tmc2209 …]` drivers, in config order (owned by the G-code thread).
+    tmc: Vec<crate::tmc::Tmc>,
 }
 
 /// `G`/`M` list and the coverage table: every command the stock firmware
@@ -289,7 +292,7 @@ pub const COMMANDS: &[&str] = &[
 ];
 
 /// Commands that exist on the printer but whose subsystem ccos does not
-/// have yet (load cells, bed mesh, TMC UART, accelerometer, input shaper,
+/// have yet (load cells, bed mesh, accelerometer, input shaper,
 /// power-loss resume). They are accepted and logged.
 pub const NOT_YET: &[(&str, &str)] = &[
     ("ACCELEROMETER_MEASURE_X", "accelerometer"),
@@ -305,10 +308,8 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("CALIBRATE_Z_OFFSET", "load-cell probing"),
     ("CHECK_BED_MESH", "load-cell probing"),
     ("DIRZCTL", "direct Z control"),
-    ("DUMP_TMC", "TMC2209 UART"),
     ("G29", "load-cell probing"),
     ("HOME_ACCURACY", "load-cell probing"),
-    ("INIT_TMC", "TMC2209 UART"),
     ("LIFT_HOT_BED", "load-cell probing"),
     ("MEASURE_AXES_NOISE", "accelerometer"),
     ("MEASURE_GAP_TEST", "load-cell probing"),
@@ -320,11 +321,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("QUERY_PROBE", "load-cell probing"),
     ("READ_HX711", "load-cell probing"),
     ("SDCARD_PRINT_FILE_BREAK_SAVE", "power-loss resume"),
-    ("SET_TMC_CURRENT_extruder", "TMC2209 UART"),
-    ("SET_TMC_CURRENT_stepper_x", "TMC2209 UART"),
-    ("SET_TMC_CURRENT_stepper_y", "TMC2209 UART"),
-    ("SET_TMC_CURRENT_stepper_z", "TMC2209 UART"),
-    ("SET_TMC_FIELD", "TMC2209 UART"),
     ("SET_INPUT_SHAPER", "input shaper"),
     ("M593", "input shaper"),
     ("SHAPER_CALIBRATE", "accelerometer"),
@@ -337,6 +333,7 @@ pub const NOT_YET: &[(&str, &str)] = &[
 
 impl Exec {
     pub fn new(p: Shared, ctl: Arc<Control>, jobs: Option<Receiver<Job>>) -> Self {
+        let tmc = Self::tmc_load(&p);
         let (limits, pa) = {
             let c = p.lock();
             (
@@ -366,6 +363,7 @@ impl Exec {
             cf: print::ChangeFilament::default(),
             mesh_enabled: true,
             reported: Default::default(),
+            tmc,
         }
     }
 
@@ -413,6 +411,9 @@ impl Exec {
         }
         if key.starts_with("M8") && key.len() == 5 && para::handles(&key) {
             return self.cmd_para(&key, g);
+        }
+        if self.tmc_handles(&key) {
+            return self.cmd_tmc(&key, g);
         }
         match key.as_str() {
             // gcode.cpp built-ins
@@ -674,6 +675,59 @@ impl Exec {
     }
 }
 
+/// `Serialhdl::send_with_response` (`SerialRetryCommand::get_response`):
+/// send, look for the reply 7 ms later and send again until it comes;
+/// "No response from MCU" after ~1500 tries. With a `print_time` the request
+/// waits for that time on a command queue of its own.
+pub(crate) fn send_with_response(p: &Shared, target: Target, name: &str, args: &[(&str, cc_proto::dict::Arg<'_>)], resp: &str, oid: i64) -> Result<cc_proto::OwnedMessage, String> {
+    send_with_response_at(p, target, name, args, resp, oid, None)
+}
+
+pub(crate) fn send_with_response_at(
+    p: &Shared,
+    target: Target,
+    name: &str,
+    args: &[(&str, cc_proto::dict::Arg<'_>)],
+    resp: &str,
+    oid: i64,
+    print_time: Option<f64>,
+) -> Result<cc_proto::OwnedMessage, String> {
+    // the response callback is registered before sending: older replies don't count
+    p.lock().responses.retain(|(t, m)| !(*t == target && m.name() == resp && m.int("oid") == Some(oid)));
+    for _ in 0..1516 {
+        {
+            let mut c = p.lock();
+            if let Some(s) = &c.shutdown {
+                return Err(s.clone());
+            }
+            let m = c.mcu(target).map_err(|e| e.to_string())?;
+            let msg = m.encode(name, args);
+            match print_time {
+                Some(pt) => {
+                    let clock = m.clock.clock(pt);
+                    m.queue_held(clock, msg);
+                }
+                None => m.queue_msg(msg),
+            }
+            c.wake();
+        }
+        let r = p.wait(0.007, resp, |c| {
+            let i = c.responses.iter().position(|(t, m)| *t == target && m.name() == resp && m.int("oid") == Some(oid))?;
+            c.responses.remove(i).map(|(_, m)| m)
+        });
+        match r {
+            Ok(m) => return Ok(m),
+            Err(e) => {
+                let c = p.lock();
+                if c.shutdown.is_some() || c.exit || c.mcus[target as usize].is_none() {
+                    return Err(e.to_string());
+                }
+            }
+        }
+    }
+    Err(format!("{}: No response from MCU", target.title()))
+}
+
 // ---- the thread ----
 
 /// List printable files, newest first.
@@ -740,9 +794,13 @@ fn connect_all(p: &Shared) {
 /// The G-code thread body.
 #[cfg(target_os = "linux")]
 pub fn run(p: Shared, ctl: Arc<Control>, jobs: Receiver<Job>) {
+    // busy until klippy:connect work (TMC setup) is done, like "not ready"
+    p.lock().ui.lock().busy = true;
     refresh_files(&p);
     connect_all(&p);
     let mut ex = Exec::new(p.clone(), ctl.clone(), Some(jobs));
+    ex.tmc_connect(None);
+    p.lock().ui.lock().busy = false;
     // Like the stock UI at boot: apply the saved Z offset (M8233 … P1).
     ex.apply_saved_z_offset();
     while let Some(job) = ex.next_job(true) {
@@ -806,12 +864,14 @@ impl Exec {
                     }
                 }
                 connect_all(&p);
+                self.tmc_connect(None);
                 self.reset_last_position();
                 self.apply_saved_z_offset();
             }
             Job::Reset(t) => {
                 p.lock().detach(t, "resetting");
                 connect(&p, t);
+                self.tmc_connect(Some(t));
             }
             Job::Probe => {
                 let c = p.lock();

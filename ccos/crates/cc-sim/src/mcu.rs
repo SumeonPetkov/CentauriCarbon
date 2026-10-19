@@ -85,6 +85,13 @@ pub trait Hardware {
     fn read_adc(&mut self, mcu: McuKind, pin: u32, t: f64) -> u16;
     /// Diagnostics (shutdowns, protocol errors).
     fn note(&mut self, mcu: McuKind, t: f64, msg: &str);
+    /// A TMC UART transfer finished sending at `t`: `sent` is what went out
+    /// on `tx_pin` (UART-framed bits, LSB first). Returns the framed reply
+    /// on `rx_pin` and how many bit times after the request it starts, or
+    /// None if the line stays idle.
+    fn uart(&mut self, _mcu: McuKind, _tx_pin: u32, _rx_pin: u32, _sent: &[u8], _t: f64) -> Option<(Vec<u8>, u32)> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -197,6 +204,20 @@ struct Trsync {
     signals: Vec<u8>,
 }
 
+/// `tmcuart.c`: one transfer at a time.
+struct TmcUart {
+    rx_pin: u32,
+    tx_pin: u32,
+    bit_time: u32,
+    active: bool,
+    data: Vec<u8>,
+    read_count: usize,
+    /// End of sending (`reading` false) or of the reply (`reading` true).
+    wake: Option<u64>,
+    reading: bool,
+    reply: Vec<u8>,
+}
+
 enum Obj {
     Unused,
     Stepper(Stepper),
@@ -205,7 +226,8 @@ enum Obj {
     Analog(Analog),
     Endstop(Endstop),
     Trsync(Trsync),
-    /// Load-cell, TMC UART, fan tach…: accepted, not simulated.
+    TmcUart(TmcUart),
+    /// Load-cell, fan tach, accelerometer…: accepted, not simulated.
     Other,
 }
 
@@ -444,6 +466,10 @@ impl VirtualMcu {
                     e.homing = false;
                 }
                 Obj::Trsync(ts) => *ts = Trsync::default(),
+                Obj::TmcUart(u) => {
+                    u.active = false;
+                    u.wake = None;
+                }
                 _ => {}
             }
         }
@@ -832,7 +858,42 @@ impl VirtualMcu {
                 }
             }
 
-            // Accepted but not simulated: TMC UART, load-cell ADCs, fan tachs,
+            "config_tmcuart" => {
+                let u = TmcUart {
+                    rx_pin: a("rx_pin") as u32,
+                    tx_pin: a("tx_pin") as u32,
+                    bit_time: a("bit_time") as u32,
+                    active: false,
+                    data: Vec::new(),
+                    read_count: 0,
+                    wake: None,
+                    reading: false,
+                    reply: Vec::new(),
+                };
+                self.set_obj(a("oid"), Obj::TmcUart(u), hw);
+            }
+            "tmcuart_send" => {
+                let oid = a("oid") as usize;
+                let write = m.bytes("write").unwrap_or(&[]).to_vec();
+                let read = a("read") as usize;
+                let start = self.now + (200e-6 * self.freq) as u64;
+                let Some(Obj::TmcUart(u)) = self.objs.get_mut(oid) else { return };
+                if u.active {
+                    return; // busy: dropped, the host sends it again
+                }
+                if write.len() > 10 || read > 10 {
+                    self.shutdown_named("tmcuart data too large", hw);
+                    return;
+                }
+                u.wake = Some(start + (write.len() * 8) as u64 * u.bit_time as u64);
+                u.active = true;
+                u.reading = false;
+                u.data = write;
+                u.read_count = read;
+                u.reply.clear();
+            }
+
+            // Accepted but not simulated: load-cell ADCs, fan tachs,
             // accelerometers, buttons, displays, direct Z control.
             n if n.starts_with("config_") => self.set_obj(a("oid"), Obj::Other, hw),
             _ => {}
@@ -1169,10 +1230,52 @@ impl VirtualMcu {
                         consider(w, oid, 2)
                     }
                 }
+                Obj::TmcUart(u) => {
+                    if let Some(w) = u.wake {
+                        consider(w, oid, 0)
+                    }
+                }
                 _ => {}
             }
         }
         best
+    }
+
+    /// `tmcuart_send_finish_event` / end of `tmcuart_read_event`.
+    fn tmcuart_event(&mut self, oid: usize, hw: &mut dyn Hardware) {
+        let t = self.time_of(self.now);
+        let kind = self.kind;
+        let now = self.now;
+        let Some(Obj::TmcUart(u)) = self.objs.get_mut(oid) else { return };
+        if !u.reading {
+            // the driver acts on the complete datagram now
+            let reply = hw.uart(kind, u.tx_pin, u.rx_pin, &u.data, t);
+            if u.read_count == 0 {
+                u.wake = None;
+            } else {
+                let bit = u.bit_time as u64;
+                u.reading = true;
+                match reply {
+                    // read_sync: sampling starts 4 bits later, waits 64 bits for the start bit
+                    Some((r, delay)) if delay <= 4 + 64 => {
+                        u.reply = r;
+                        u.reply.truncate(u.read_count);
+                        u.wake = Some(now + (delay as u64 + u.read_count as u64 * 8) * bit);
+                    }
+                    _ => {
+                        u.reply.clear();
+                        u.wake = Some(now + (4 + 65) * bit);
+                    }
+                }
+                return;
+            }
+        } else {
+            u.wake = None;
+        }
+        u.active = false;
+        // a timed-out read reports nothing (read_count = 0)
+        let data = if u.reading && u.reply.len() < u.read_count { Vec::new() } else { std::mem::take(&mut u.reply) };
+        self.send("tmcuart_response", &[("oid", Arg::Int(oid as i64)), ("read", Arg::Bytes(&data))]);
     }
 
     /// Run every timer due up to time `t`.
@@ -1207,6 +1310,7 @@ impl VirtualMcu {
                     }
                     Obj::Analog(_) => self.analog_event(oid, hw),
                     Obj::Endstop(_) => self.endstop_event(oid, hw),
+                    Obj::TmcUart(_) => self.tmcuart_event(oid, hw),
                     Obj::Trsync(_) => {
                         if k == 1 {
                             if let Some(Obj::Trsync(ts)) = self.objs.get_mut(oid) {

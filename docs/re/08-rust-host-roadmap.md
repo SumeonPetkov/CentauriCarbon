@@ -82,9 +82,13 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
    accounting. Still to do on the device: run the I/O thread `SCHED_FIFO`.
 6. ✅ **Kinematics & planning** (`motion/planner.rs`): Klipper's look-ahead,
    CoreXY. Pressure advance and input shaping are still missing.
-7. **TMC2209 over UART** (`tmcuart_send`) — needed before X/Y StallGuard
-   homing can work on the real machine. Homing itself (trsync,
-   `endstop_home`, `stepper_stop_on_trigger`) is done and emulator-tested.
+7. ✅ **TMC2209 over UART** (`tmc.rs`, `gcode/tmc.rs`): a port of the
+   stock driver code. It covers the connect-time register set, the
+   StallGuard switching around homing, `SET_TMC_CURRENT_*`, `INIT_TMC`,
+   `SET_TMC_FIELD`, `DUMP_TMC` and IFCNT-checked writes. Homing uses the
+   stock trsync protocol, trdispatch included. Both are tested against
+   the emulator's driver model; neither has been checked on a real
+   printer yet.
 8. **Load-cell probing** — the hard, Centauri-specific part: HX711/HX717
    streaming from the bed MCU, filters (`strain_gauge*.cpp`, `filter.cpp`,
    `tiny_ekf`), trigger detection, bed mesh with bicubic/lagrange interpolation.
@@ -108,7 +112,12 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
 
 Heaters and motion are physical. On the real printer `ccos` configures only
 the chamber light and the hotend cooling fan unless you set
-`CCOS_ENABLE_MOTION=1` — don't, until the TMC2209 setup exists and each
-piece has been validated on the machine with someone watching it. Keep a way
+`CCOS_ENABLE_MOTION=1`. Don't set it until each piece has been checked on
+the machine with someone watching. The TMC2209 setup now exists, but it has
+only been tested in the emulator. A sensible order:
+1. Connect only. Every driver write is verified through IFCNT; look for
+   `Unable to write tmc uart` or `failed to init` in the log.
+2. Short single moves of each axis.
+3. Then homing. Keep a way
 back to the stock `app` (it stays on disk; a reboot restores it unless you
 change the init scripts).

@@ -15,6 +15,7 @@ pub mod mcu;
 pub mod motion;
 pub mod runtime;
 pub mod sys;
+pub mod tmc;
 
 /// Screens, fonts and icons compiled from `ccos/ui/` by `build.rs`.
 pub mod ui {

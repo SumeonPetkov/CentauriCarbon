@@ -196,6 +196,8 @@ impl Runtime {
             s.print.file = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             s.print.progress = 0.0;
             s.print.started = None;
+            s.print.layer = 0;
+            s.print.total_layers = 0;
         }
         self.send(Job::Print(path));
     }

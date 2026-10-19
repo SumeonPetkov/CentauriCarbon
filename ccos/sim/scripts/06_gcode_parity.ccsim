@@ -3,6 +3,8 @@
 # PAUSE / RESUME / CANCEL_PRINT during a print.
 option speed 3
 wait_until links == 3 timeout 20
+# the TMC drivers are set up after connecting (G-code waits until then)
+wait_until busy == 0 timeout 20
 
 # unknown commands are logged and skipped; M21 and M105 are silent
 gcode FOO_BAR X=1
@@ -57,6 +59,7 @@ expect console ~ "z_offset : 0"
 
 # PAUSE / RESUME / CANCEL_PRINT run the stock scripts
 print cube_20mm.gcode
+wait_until print_state == "Printing" timeout 10
 wait_until layer >= 2 timeout 300
 command pause
 wait_until print_state == "Paused" timeout 30

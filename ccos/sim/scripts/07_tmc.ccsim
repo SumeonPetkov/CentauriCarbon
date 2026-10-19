@@ -1,0 +1,76 @@
+# TMC2209 drivers set up the stock way over the MCUs' UARTs (docs/re/10-gcode.md).
+# The virtual drivers only microstep at 1/16 and only assert DIAG for
+# StallGuard homing if ccos configures them like the stock firmware does.
+# heaters 3x faster (G28 preheats to 140 °C; faster makes the stock PID oscillate)
+option speed 3
+wait_until links == 3 timeout 20
+
+# klippy:connect: the register images printer.cfg gives
+wait_until tmc_z_pwmconf == 0xc80d0e24 timeout 10
+expect tmc_x_gconf == 0xc0
+expect tmc_x_chopconf == 0x14010053
+expect tmc_x_ihold_irun == 0x81010
+expect tmc_x_pwmconf == 0xc80d0e24
+expect tmc_x_sgthrs == 120
+expect tmc_x_slaveconf == 0x200
+expect tmc_x_tpowerdown == 20
+# stealthchop_threshold 0: 12 MHz · d / 0 saturates to 0xfffff
+expect tmc_x_tpwmthrs == 0xfffff
+expect tmc_x_tcoolthrs == 0
+expect tmc_x_microsteps == 16
+expect tmc_y_chopconf == 0x14010053
+expect tmc_y_microsteps == 16
+# 0.8 A needs the high-sensitivity range (vsense)
+expect tmc_z_chopconf == 0x14030053
+expect tmc_z_ihold_irun == 0x81717
+# stealthchop_threshold 99999: always StealthChop
+expect tmc_z_tpwmthrs == 0
+expect tmc_z_microsteps == 16
+expect tmc_e_ihold_irun == 0x8170e
+expect tmc_e_sgthrs == 10
+expect tmc_e_tpwmthrs == 0xfffff
+
+# SET_TMC_CURRENT: reports the currents after a change...
+gcode SET_TMC_CURRENT_stepper_x CURRENT=0.8
+wait_until tmc_x_ihold_irun == 0x81717 timeout 5
+expect tmc_x_chopconf == 0x14030053
+wait 0.3
+expect console ~ "stepper_x Run Current: 0.795495A Hold Current: 0.795495A"
+# ...and restores printer.cfg without parameters
+gcode SET_TMC_CURRENT_stepper_x
+wait_until tmc_x_ihold_irun == 0x81010 timeout 5
+expect tmc_x_chopconf == 0x14010053
+
+# INIT_TMC / SET_TMC_FIELD / DUMP_TMC ignore STEPPER=: the extruder answers
+gcode SET_TMC_FIELD STEPPER=stepper_x FIELD=sgthrs VALUE=55
+wait_until tmc_e_sgthrs == 55 timeout 5
+expect tmc_x_sgthrs == 120
+gcode INIT_TMC STEPPER=stepper_x\nDUMP_TMC STEPPER=stepper_y
+wait 1
+wait_until busy == 0 timeout 10
+expect tmc_e_sgthrs == 55
+expect tmc_x_sgthrs == 120
+
+# homing: StallGuard on for each homing move, off afterwards
+gcode G28 X
+wait 1
+wait_until busy == 0 timeout 60
+expect homed == "x"
+expect tmc_x_sgthrs == 0
+expect tmc_x_tcoolthrs == 0
+expect tmc_x_tpwmthrs == 0xfffff
+expect tmc_x_gconf == 0xc0
+expect tmc_x_ihold_irun == 0x81010
+expect push_x < 0.05
+
+# a broken DIAG wire: X fails (axes unhomed, no error, motors stay on) and
+# G28 carries on with Y, as the stock kinematics do
+inject x_diag_dead
+gcode G28 X Y
+wait 1
+wait_until busy == 0 timeout 120
+expect homed == "y"
+expect console ~ "Failed to home x"
+expect shutdown == "none"
+expect mcu_shutdown == "none"
+clear x_diag_dead

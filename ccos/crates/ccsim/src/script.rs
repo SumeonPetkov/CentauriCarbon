@@ -80,7 +80,14 @@ fn parse_cond(s: &str) -> Result<Cond, String> {
     for (tok, op) in ops {
         if let Some((l, r)) = s.split_once(&format!(" {tok} ")) {
             let r = r.trim();
-            let rhs = if r.starts_with('"') { Val::Str(unquote(r)) } else { r.parse::<f64>().map(Val::Num).unwrap_or_else(|_| Val::Str(r.to_string())) };
+            let hex = r.strip_prefix("0x").and_then(|h| u64::from_str_radix(h, 16).ok()).map(|v| Val::Num(v as f64));
+            let rhs = if r.starts_with('"') {
+                Val::Str(unquote(r))
+            } else if let Some(h) = hex {
+                h
+            } else {
+                r.parse::<f64>().map(Val::Num).unwrap_or_else(|_| Val::Str(r.to_string()))
+            };
             return Ok(Cond { name: l.trim().to_string(), op, rhs });
         }
     }

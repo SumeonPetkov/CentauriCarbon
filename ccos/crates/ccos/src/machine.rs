@@ -154,6 +154,31 @@ pub struct Machine {
     pub pid_bed_temp: f64,
     pub idle_timeout: f64,
     pub led_pins: [Pin; 2],
+    /// One bit-banged TMC UART per MCU (`MCU_TMC_uart_bitbang`, shared by
+    /// the drivers on the same pins).
+    pub tmc_uarts: Vec<TmcUart>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TmcUart {
+    pub target: Target,
+    pub rx: Pin,
+    pub tx: Pin,
+    pub pull_up: bool,
+}
+
+fn tmc_uarts(c: &Config) -> Vec<TmcUart> {
+    let mut v: Vec<TmcUart> = Vec::new();
+    for sec in crate::tmc::sections(c) {
+        let rx_s = c.get_string(&sec, "uart_pin", "");
+        let rx = parse_pin(&rx_s);
+        let tx_s = c.get_string(&sec, "tx_pin", "");
+        let tx = if tx_s.is_empty() { rx.clone() } else { parse_pin(&tx_s) };
+        if !v.iter().any(|u| u.target == rx.target) {
+            v.push(TmcUart { target: rx.target, pull_up: rx_s.contains('^'), rx, tx });
+        }
+    }
+    v
 }
 
 fn axis(c: &Config, sec: &str, name: char, steppers: &'static [usize], oid: u8, endstop_default: &str) -> AxisDef {
@@ -331,6 +356,7 @@ impl Machine {
             pid_bed_temp: c.get_double("pid_calibrate", "heater_bed_target_temp", 60.0),
             idle_timeout: c.get_double("idle_timeout", "timeout", 1800.0),
             led_pins: [parse_pin(&c.get_string("led led1", "red_pin", "stm32:PC9")), parse_pin(&c.get_string("led led2", "red_pin", "PG15"))],
+            tmc_uarts: tmc_uarts(c),
         }
     }
 
@@ -380,7 +406,9 @@ pub mod dsp {
     pub const AUX_FAN: u8 = 14;
     pub const CHAMBER_FAN: u8 = 15;
     pub const BOARD_FAN: u8 = 16;
-    pub const COUNT: u8 = 17;
+    /// TMC2209 UART shared by stepper_x/y/z (tx PE9, rx PE6).
+    pub const TMCUART: u8 = 17;
+    pub const COUNT: u8 = 18;
 }
 
 /// oids on the toolhead STM32.
@@ -393,7 +421,9 @@ pub mod toolhead {
     pub const HOTEND_FAN: u8 = 5;
     /// `[led led1]` red_pin stm32:PC9.
     pub const LED: u8 = 6;
-    pub const COUNT: u8 = 7;
+    /// TMC2209 UART of the extruder (tx PC6, rx PC7).
+    pub const TMCUART: u8 = 7;
+    pub const COUNT: u8 = 8;
 }
 
 /// ADC (Define.h): 8 samples 1 ms apart, reported every 0.5 s.

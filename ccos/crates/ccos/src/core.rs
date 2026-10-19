@@ -60,6 +60,24 @@ pub const FAN_BOX: usize = 2;
 pub const FAN_HOTEND: usize = 3;
 pub const FAN_BOARD: usize = 4;
 
+/// `trdispatch` (chelper/trdispatch.c) for one homing on one MCU: while the
+/// MCU reports `can_trigger=1` the timeout is pushed out to the report
+/// clock + `expire_ticks` (sent when it moves by `min_extend_ticks`); when
+/// it reports a trigger, `trsync_trigger` with the dispatch reason is sent
+/// back. Runs on the I/O thread like the firmware's serial reader.
+#[derive(Debug, Clone)]
+pub struct TrDispatch {
+    pub target: Target,
+    pub oid: u8,
+    pub can_trigger: bool,
+    pub reason: u8,
+    pub expire_clock: u64,
+    pub expire_ticks: u64,
+    pub min_extend_ticks: u64,
+    /// `trigger_reason` of the MCU's trigger report (`is_trigger`).
+    pub triggered: Option<u8>,
+}
+
 /// `PrinterFan` state (fan.cpp).
 #[derive(Debug, Clone, Copy)]
 pub struct Fan {
@@ -105,6 +123,7 @@ pub struct Core {
     gen_time: f64,
     /// Homing in progress: generate only a little ahead.
     pub homing: bool,
+    pub trdispatch: Option<TrDispatch>,
     last_move_add: f64,
     /// Replies the G-code thread waits for (trsync_state, stepper_position…).
     pub responses: VecDeque<(Target, OwnedMessage)>,
@@ -234,6 +253,7 @@ impl Core {
             batch: Default::default(),
             gen_time: 0.0,
             homing: false,
+            trdispatch: None,
             last_move_add: 0.0,
             responses: VecDeque::with_capacity(64),
             fan_tokens: Vec::new(),
@@ -327,6 +347,7 @@ impl Core {
         self.stop_motion();
         self.homed = [false; 3];
         self.homing = false;
+        self.trdispatch = None;
         self.shutdown = Some(reason);
         self.wake();
     }
@@ -837,7 +858,10 @@ impl Core {
                         _ => {}
                     }
                 }
-                "trsync_state" | "stepper_position" | "endstop_state" | "pong" => {
+                "trsync_state" | "stepper_position" | "endstop_state" | "pong" | "tmcuart_response" => {
+                    if m.name() == "trsync_state" {
+                        self.trdispatch_state(target, &m);
+                    }
                     if self.responses.len() == 64 {
                         self.responses.pop_front();
                     }
@@ -845,6 +869,31 @@ impl Core {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// `handle_trsync_state` of trdispatch.c (and `MCU_trsync`'s
+    /// `is_trigger`).
+    fn trdispatch_state(&mut self, target: Target, m: &OwnedMessage) {
+        let oid = m.int("oid").unwrap_or(-1);
+        let Some(td) = self.trdispatch.as_mut() else { return };
+        if td.target != target || td.oid as i64 != oid || !td.can_trigger {
+            return;
+        }
+        let Some(mcu) = self.mcus[target as usize].as_mut() else { return };
+        if m.int("can_trigger") == Some(0) {
+            td.can_trigger = false;
+            td.triggered = Some(m.int("trigger_reason").unwrap_or(0) as u8);
+            let msg = mcu.encode("trsync_trigger", &[("oid", Arg::Int(oid)), ("reason", Arg::Int(td.reason as i64))]);
+            mcu.queue_msg(msg);
+            return;
+        }
+        let status = mcu.clock.extend(m.int("clock").unwrap_or(0) as u32);
+        let expire = status + td.expire_ticks;
+        if expire as i64 - td.expire_clock as i64 >= td.min_extend_ticks as i64 {
+            td.expire_clock = expire;
+            let msg = mcu.encode("trsync_set_timeout", &[("oid", Arg::Int(oid)), ("clock", Arg::Int(expire as u32 as i64))]);
+            mcu.queue_msg(msg);
         }
     }
 
@@ -952,6 +1001,14 @@ fn configure(mcu: &mut Mcu, mc: &Machine, t: Target, motion: bool) -> Result<()>
     }
     for (oid, p, _, _, _) in &adcs {
         cmds.push(format!("config_analog_in oid={oid} pin={p}"));
+    }
+    if motion {
+        // MCU_TMC_uart_bitbang::build_config, 20 kbaud
+        for u in mc.tmc_uarts.iter().filter(|u| u.target == t) {
+            let oid = if t == Target::Dsp { dsp::TMCUART } else { toolhead::TMCUART };
+            let bit_time = (t.nominal_clock() / crate::tmc::TMC_BAUD_RATE) as u64;
+            cmds.push(format!("config_tmcuart oid={oid} rx_pin={} pull_up={} tx_pin={} bit_time={bit_time}", pin(&u.rx)?, u.pull_up as u8, pin(&u.tx)?));
+        }
     }
     cmds.push("finalize_config crc=0".into());
     for c in &cmds {

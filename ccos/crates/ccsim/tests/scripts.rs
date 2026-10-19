@@ -48,6 +48,11 @@ fn gcode_parity() {
     run("06_gcode_parity.ccsim");
 }
 
+#[test]
+fn tmc_drivers() {
+    run("07_tmc.ccsim");
+}
+
 /// Every script file has a test above.
 #[test]
 fn all_scripts_listed() {

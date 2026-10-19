@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use crate::mcu::{Hardware, McuKind};
+use crate::tmc::{self, Tmc2209};
 use cc_proto::dict::pin_number;
 
 /// Faults a test can inject.
@@ -31,10 +32,12 @@ pub enum Fault {
     HotendThermistorLoose,
     /// Toolhead board stops answering (USB cable unplugged).
     ToolheadUnplugged,
+    /// stepper_x's DIAG wire broken: X homing never triggers.
+    XDiagDead,
 }
 
 impl Fault {
-    pub const ALL: [Fault; 7] = [
+    pub const ALL: [Fault; 8] = [
         Fault::HotendHeaterDead,
         Fault::BedHeaterDead,
         Fault::HotendThermistorOpen,
@@ -42,6 +45,7 @@ impl Fault {
         Fault::BedThermistorOpen,
         Fault::HotendThermistorLoose,
         Fault::ToolheadUnplugged,
+        Fault::XDiagDead,
     ];
 
     pub fn name(self) -> &'static str {
@@ -53,6 +57,7 @@ impl Fault {
             Fault::BedThermistorOpen => "bed_thermistor_open",
             Fault::HotendThermistorLoose => "hotend_thermistor_loose",
             Fault::ToolheadUnplugged => "toolhead_unplugged",
+            Fault::XDiagDead => "x_diag_dead",
         }
     }
 
@@ -121,6 +126,13 @@ const MOTORS: [MotorWiring; 4] = [
     MotorWiring { mcu: McuKind::Toolhead, step: "PC13", dir: "PC14", enable: "PC15", dir_inverted: false, step_dist: E_STEP },
 ];
 
+/// TMC2209 UARTs: (MCU, tx pin, rx pin, [(node address, motor)]). The
+/// address is strapped with MS1/MS2 on the board.
+const UARTS: [(McuKind, &str, &str, &[(u8, usize)]); 2] =
+    [(McuKind::Dsp, "PE9", "PE6", &[(0, 0), (3, 1), (1, 2)]), (McuKind::Toolhead, "PC6", "PC7", &[(3, 3)])];
+/// Microsteps the step distances above assume (printer.cfg `microsteps`).
+const CFG_MICROSTEPS: f64 = 16.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Role {
     Step(usize),
@@ -160,12 +172,17 @@ const PINS: &[(McuKind, &str, Role)] = &[
 
 #[derive(Debug, Clone, Default)]
 pub struct Motor {
-    /// Physical position in steps (+ = positive axis direction).
+    /// Step pulses, signed by direction.
     pub steps: i64,
+    /// Rotor position in 1/16 steps (what `step_dist` is per): a pulse
+    /// moves 16/µsteps of them, µsteps as the driver is set.
+    pub travel: f64,
     pub enabled: bool,
     /// Steps that arrived while the driver was disabled.
     pub lost_steps: u64,
     pub total_steps: u64,
+    last_step_t: f64,
+    step_interval: f64,
 }
 
 /// A lumped thermal mass: `C dT/dt = P·duty − k (T − T_amb)`.
@@ -203,6 +220,8 @@ pub struct PrintStats {
 pub struct World {
     pub cfg: WorldConfig,
     pub motors: [Motor; 4],
+    /// The motors' TMC2209 drivers (A, B, Z, extruder).
+    pub tmc: [Tmc2209; 4],
     /// Carriage x, y and nozzle-to-bed gap z (mm).
     pub pos: [f64; 3],
     offset: [f64; 3],
@@ -290,6 +309,10 @@ impl World {
             pos: cfg.start,
             offset: cfg.start,
             motors: Default::default(),
+            tmc: [0usize, 1, 2, 3].map(|m| {
+                let addr = UARTS.iter().flat_map(|u| u.3.iter()).find(|(_, mm)| *mm == m).map_or(0, |(a, _)| *a);
+                Tmc2209::power_on(addr)
+            }),
             stalled: [false; 3],
             push_mm: [0.0; 3],
             e_mm: 0.0,
@@ -357,10 +380,21 @@ impl World {
         }
     }
 
+    /// What a driver sees of its motor at time `t`.
+    fn live(&self, i: usize, t: f64) -> tmc::Live {
+        let m = &self.motors[i];
+        let stalled = match i {
+            0 | 1 => self.stalled[0] || self.stalled[1],
+            2 => self.stalled[2],
+            _ => false,
+        };
+        tmc::Live { step_interval: m.step_interval, since_step: t - m.last_step_t, enabled: m.enabled, stalled }
+    }
+
     fn carriage_moved(&mut self, axis_mask: u8) {
-        let a = self.motors[0].steps as f64 * XY_STEP;
-        let b = self.motors[1].steps as f64 * XY_STEP;
-        let z = self.motors[2].steps as f64 * Z_STEP;
+        let a = self.motors[0].travel * XY_STEP;
+        let b = self.motors[1].travel * XY_STEP;
+        let z = self.motors[2].travel * Z_STEP;
         let cand = [(a + b) * 0.5 + self.offset[0], (a - b) * 0.5 + self.offset[1], z + self.offset[2]];
         let lim = [self.cfg.x_limits, self.cfg.y_limits, self.cfg.z_limits];
         for i in 0..3 {
@@ -457,6 +491,7 @@ impl Hardware for World {
     fn step(&mut self, mcu: McuKind, step_pin: u32, dir: bool, t: f64) {
         let Some(Role::Step(i)) = self.roles.get(&(mcu, step_pin)).copied() else { return };
         let w = MOTORS[i];
+        let scale = CFG_MICROSTEPS / self.tmc[i].microsteps() as f64;
         let m = &mut self.motors[i];
         m.total_steps += 1;
         if !m.enabled {
@@ -468,6 +503,11 @@ impl Hardware for World {
         }
         let d = if dir != w.dir_inverted { 1 } else { -1 };
         m.steps += d;
+        m.travel += d as f64 * scale;
+        if m.last_step_t > 0.0 {
+            m.step_interval = t - m.last_step_t;
+        }
+        m.last_step_t = t;
         match i {
             0 | 1 => self.carriage_moved(0b011),
             2 => {
@@ -477,7 +517,7 @@ impl Hardware for World {
                     self.note_event(t, format!("nozzle pressed into the bed at x={:.1} y={:.1}", self.pos[0], self.pos[1]));
                 }
             }
-            _ => self.extrude(d as f64 * w.step_dist),
+            _ => self.extrude(d as f64 * scale * w.step_dist),
         }
     }
 
@@ -505,11 +545,12 @@ impl Hardware for World {
         }
     }
 
-    fn read_pin(&mut self, mcu: McuKind, pin: u32, _t: f64) -> bool {
+    fn read_pin(&mut self, mcu: McuKind, pin: u32, t: f64) -> bool {
         match self.roles.get(&(mcu, pin)) {
-            // TMC2209 DIAG is active-low in printer.cfg (`diag_pin: !PG4`).
-            Some(Role::DiagX) => !self.stalled[0],
-            Some(Role::DiagY) => !self.stalled[1],
+            // DIAG of the A/B drivers through the board's inverter
+            // (`diag_pin: !PG4`); only asserted with StallGuard set up.
+            Some(Role::DiagX) => !(self.stalled[0] && self.tmc[0].diag(&self.live(0, t)) && !self.faults.contains(&Fault::XDiagDead)),
+            Some(Role::DiagY) => !(self.stalled[1] && self.tmc[1].diag(&self.live(1, t))),
             Some(Role::ZEndstop) => self.pos[2] <= self.cfg.z_trigger + 1e-9,
             _ => false,
         }
@@ -545,5 +586,33 @@ impl Hardware for World {
 
     fn note(&mut self, mcu: McuKind, t: f64, msg: &str) {
         self.note_event(t, format!("{}: {msg}", mcu.name()));
+    }
+
+    fn uart(&mut self, mcu: McuKind, tx_pin: u32, rx_pin: u32, sent: &[u8], t: f64) -> Option<(Vec<u8>, u32)> {
+        let ppb = mcu.pins_per_bank();
+        let (_, _, _, nodes) = UARTS.iter().find(|u| u.0 == mcu && pin_number(u.1, ppb) == Some(tx_pin) && pin_number(u.2, ppb) == Some(rx_pin))?;
+        let Some(bytes) = tmc::unframe(sent) else {
+            self.note_event(t, format!("{}: TMC UART framing error", mcu.name()));
+            return None;
+        };
+        let Some(req) = tmc::parse_request(&bytes) else {
+            self.note_event(t, format!("{}: TMC datagram rejected (sync/CRC): {bytes:02x?}", mcu.name()));
+            return None;
+        };
+        match req {
+            tmc::Request::Write { addr, reg, val } => {
+                match nodes.iter().find(|(a, _)| *a == addr) {
+                    Some((_, m)) => self.tmc[*m].write(reg, val),
+                    None => self.note_event(t, format!("{}: TMC write to absent node {addr}", mcu.name())),
+                }
+                None
+            }
+            tmc::Request::Read { addr, reg } => {
+                let (_, m) = *nodes.iter().find(|(a, _)| *a == addr)?;
+                let live = self.live(m, t);
+                let v = self.tmc[m].read(reg, &live)?;
+                Some((tmc::frame(&tmc::reply(reg, v)), self.tmc[m].senddelay_bits()))
+            }
+        }
     }
 }

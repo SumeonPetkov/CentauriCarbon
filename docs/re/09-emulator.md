@@ -61,10 +61,21 @@ cover. The toolhead link is throttled to 100 kB/s and the load-cell board to
   extruder, with the stock step distances and `!` direction inversions;
   steps to a disabled driver are lost (and counted).
 * Frame limits: pushing past them slips the belt (position is lost, as on the
-  real machine) and asserts the TMC2209 DIAG output (`!PG4`, `!PF6`) used for
-  StallGuard homing; the Z endstop `PG8` (a separate sensor, not the load
+  real machine); the Z endstop `PG8` (a separate sensor, not the load
   cells) closes 4.5 mm before the nozzle reaches the bed, which is
   `position_endstop_extra` in `printer.cfg`.
+* Four TMC2209 drivers (`crates/cc-sim/src/tmc.rs`) on the MCUs' UARTs
+  (`tmcuart.c`: one transfer at a time, a busy UART drops the request,
+  a read that gets no start bit within 64 bits returns nothing).
+  Each driver has these traits:
+  - its node address from the MS1/MS2 pins (X 0, Y 3, Z 1, E 3);
+  - the datasheet power-on registers, access types, IFCNT and SENDDELAY;
+  - microstepping from those same pins (1/8, 1/32 or 1/16) until the
+    host sets `mstep_reg_select`, so an unconfigured X moves twice as
+    far per step;
+  - a DIAG output (`!PG4`, `!PF6`) that asserts on a stall only in
+    StealthChop, with SGTHRS > 0, TOFF > 0 and TCOOLTHRS ≥ TSTEP >
+    TPWMTHRS. TSTEP comes from the actual step rate.
 * Heaters as lumped thermal masses (hotend ≈ 60 W, bed ≈ 350 W, chamber
   coupled to the bed; the part fan cools the hotend), NTC 100K thermistors
   (β 4300 / 3950) on 4.7 kΩ pull-ups into 12-bit ADCs with noise.
@@ -74,8 +85,8 @@ cover. The toolhead link is throttled to 100 kB/s and the load-cell board to
 
 **Faults** to inject: `hotend_heater_dead`, `bed_heater_dead`,
 `hotend_thermistor_open`, `hotend_thermistor_short`, `bed_thermistor_open`,
-`hotend_thermistor_loose`, `toolhead_unplugged`; and `--corrupt <p>` flips bits
-in bytes the host sends.
+`hotend_thermistor_loose`, `toolhead_unplugged`, `x_diag_dead`; and
+`--corrupt <p>` flips bits in bytes the host sends.
 
 ## ccos changes that made this possible
 
@@ -116,6 +127,7 @@ The emulator needed — and drove — the printing core:
 | `03_print_cube` | prints `cube_20mm.gcode` from the Print screen: CUSTOM_ZERO instead of the first G28, `;LAYER:` counting, 6 layers 0.15 mm above commanded (no bed mesh), bounding box, no cold extrusion, no lost steps, end G-code turns everything off |
 | `04_faults` | open thermistor → host *thermistor fault* (stock `min_temp` is −200, so the MCU range check cannot fire); dead heater → *not heating at expected rate*; USB unplugged → MCU *Missed scheduling…* then host *no response*; restart after each; unhomed move silently dropped; out-of-range target only warned |
 | `05_stress` | G2 arcs and a 300 mm/s zig-zag while 1 in 2000 bytes are corrupted: retransmits happen, nothing is lost or late |
+| `07_tmc` | TMC2209 register images after connect, SET_TMC_CURRENT, INIT_TMC/SET_TMC_FIELD answered by the extruder driver, StallGuard on/off around homing, a broken X DIAG: X fails, G28 goes on with Y |
 | `06_gcode_parity` | stock parser/console behaviour (unknown commands, M21 silent, range error text, upper-casing), M106 P/S rules, SET_LED TRANSMIT, the ROOT gate in a file, PAUSE/RESUME/CANCEL_PRINT during a print |
 
 Example:
@@ -135,8 +147,9 @@ bedshot shots/cube_bed.png
 
 * Timing is real time on a PC: it shows protocol/scheduling bugs, not whether
   the A7 is fast enough — measure that on the printer.
-* No TMC2209 UART model: DIAG behaves like ideal StallGuard. On the real
-  printer ccos would first have to configure the drivers over `tmcuart`.
+* The TMC2209 model has no current or load physics: StallGuard is ideal
+  once enabled (no false or late stall detection), and the run current
+  changes nothing.
 * No load-cell model (bed mesh, probing) and no input shaping/pressure
   advance in ccos yet (phase 2 of [10](10-gcode.md)).
 * The `console` probe reads a process-wide ring of the last 256 console

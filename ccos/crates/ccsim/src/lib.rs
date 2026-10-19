@@ -83,6 +83,7 @@ pub const QUERIES: &[(&str, &str)] = &[
     ("layers, bbox_x0, bbox_y0, bbox_x1, bbox_y1, bbox_w, bbox_h, max_z", "what was printed"),
     ("push_x, push_y, push_z", "deepest push past a frame limit / into the bed (mm)"),
     ("lost_steps", "steps sent to disabled drivers"),
+    ("tmc_<x|y|z|e>_<reg>", "TMC2209 register (gconf, gstat, ifcnt, slaveconf, ihold_irun, tpowerdown, tpwmthrs, tcoolthrs, sgthrs, chopconf, pwmconf), microsteps, writes"),
     ("light, part_fan, hotend_fan, nozzle_pwm, bed_pwm", "outputs (0..1)"),
     ("mcu_shutdown", "MCU shutdown reasons (\"toolhead: ADC out of range; …\"), or \"none\""),
     ("shutdown", "ccos shutdown reason, or \"none\""),
@@ -178,6 +179,23 @@ impl Emu {
                     Some(Val::Str(if all.is_empty() { "none".into() } else { all.join("; ") }))
                 }
                 "naks" => num(p.mcus.iter().map(|m| m.naks).sum::<u64>() as f64),
+                n if n.starts_with("tmc_") => {
+                    // tmc_<x|y|z|e>_<register|microsteps|writes>
+                    let mut it = n[4..].splitn(2, '_');
+                    let m = match it.next() {
+                        Some("x") => 0,
+                        Some("y") => 1,
+                        Some("z") => 2,
+                        Some("e") => 3,
+                        _ => return None,
+                    };
+                    let d = &w.tmc[m];
+                    match it.next()? {
+                        "microsteps" => num(d.microsteps() as f64),
+                        "writes" => num(d.writes as f64),
+                        r => cc_sim::tmc::NAMES.iter().find(|(k, _)| *k == r).and_then(|(_, a)| num(d.reg(*a) as f64)),
+                    }
+                }
                 _ => None,
             };
             if r.is_some() {

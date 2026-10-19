@@ -152,6 +152,9 @@ pub struct Mcu {
     window: usize,
     urgent: VecDeque<MsgBuf>,
     sched: VecDeque<Scheduled>,
+    /// Messages of another command queue (TMC UART): held until their
+    /// `min_clock`, independently of the step messages in `sched`.
+    held: VecDeque<(u64, MsgBuf)>,
     srtt: f64,
     rttvar: f64,
     rto: f64,
@@ -190,6 +193,7 @@ impl Mcu {
             window,
             urgent: VecDeque::with_capacity(256),
             sched: VecDeque::with_capacity(2048),
+            held: VecDeque::new(),
             srtt: 0.0,
             rttvar: 0.0,
             rto: MIN_RTO * 4.0,
@@ -242,6 +246,12 @@ impl Mcu {
         self.sched.push_back(Scheduled { min_clock, req_clock, tag, msg: m });
     }
 
+    /// Queue a message on a separate command queue: sent once the MCU
+    /// clock reaches `min_clock`, without holding up the step messages.
+    pub fn queue_held(&mut self, min_clock: u64, m: MsgBuf) {
+        self.held.push_back((min_clock, m));
+    }
+
     /// Drop unsent scheduled messages with this tag (steps of a stopped stepper).
     pub fn withdraw(&mut self, tag: u8) -> usize {
         let n = self.sched.len();
@@ -251,12 +261,12 @@ impl Mcu {
 
     /// Scheduled messages not yet sent.
     pub fn backlog(&self) -> usize {
-        self.sched.len()
+        self.sched.len() + self.held.len()
     }
 
     /// Nothing waiting to be sent or acknowledged.
     pub fn idle(&self) -> bool {
-        self.urgent.is_empty() && self.sched.is_empty() && self.inflight.is_empty()
+        self.urgent.is_empty() && self.sched.is_empty() && self.held.is_empty() && self.inflight.is_empty()
     }
 
     // ---- I/O ----
@@ -422,6 +432,14 @@ impl Mcu {
                         }
                         p.extend(s.msg.as_slice())?;
                         self.sched.pop_front();
+                        continue;
+                    }
+                    _ => {}
+                }
+                match self.held.front() {
+                    Some((min, m)) if *min <= est && m.len() <= left => {
+                        p.extend(m.as_slice())?;
+                        self.held.pop_front();
                     }
                     _ => break,
                 }
@@ -448,6 +466,9 @@ impl Mcu {
         }
         if let Some(s) = self.sched.front() {
             d = d.min(self.clock.time(s.min_clock));
+        }
+        if let Some((min, _)) = self.held.front() {
+            d = d.min(self.clock.time(*min));
         }
         d
     }

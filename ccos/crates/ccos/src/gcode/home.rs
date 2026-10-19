@@ -15,10 +15,22 @@ use cc_proto::dict::Arg;
 
 use super::parse::{cpp_to_string, Abort, CmdResult, GCmd};
 use super::Exec;
+use crate::core::TrDispatch;
 use crate::machine::{self, dsp};
 use crate::Target;
 
 const STEPPER_NAMES: [&str; 3] = ["stepper_x", "stepper_y", "stepper_z"];
+
+// Define.h / mcu.h / mcu_io.h / toolhead.cpp
+const HOMING_START_DELAY: f64 = 0.001;
+const ENDSTOP_SAMPLE_TIME: f64 = 0.000015;
+const ENDSTOP_SAMPLE_COUNT: i64 = 4;
+const TRSYNC_SINGLE_MCU_TIMEOUT: f64 = 0.250;
+/// `kin_flush_delay` = SDS_CHECK_TIME.
+const KIN_FLUSH_DELAY: f64 = 0.008576076596340965;
+const REASON_ENDSTOP_HIT: i64 = 1;
+const REASON_COMMS_TIMEOUT: i64 = 2;
+const REASON_HOST_REQUEST: i64 = 3;
 
 impl Exec {
     /// `ToolHead::manual_move`: absent coordinates keep their value.
@@ -39,6 +51,16 @@ impl Exec {
     pub(super) fn cmd_g28(&mut self, g: &GCmd, custom: bool) -> CmdResult {
         if let Some(l) = self.core().hw.motion_lock() {
             return Err(Abort(l.into()));
+        }
+        // PrinterHoming::cmd_G28: with [strain_gauge] enable_z_home the load
+        // cells home Z (the stock printer.cfg has it off: PG8 is used)
+        let z_wanted = !["X", "Y"].iter().any(|a| !g.get_string(a, "").is_empty()) || !g.get_string("Z", "").is_empty();
+        let sg_home = {
+            let c = self.core();
+            c.cfgs.printer.has_section("strain_gauge") && c.cfgs.printer.get_bool("strain_gauge", "enable_z_home", true)
+        };
+        if z_wanted && sg_home {
+            return Err(Abort("G28: Z homing with the load cells ([strain_gauge] enable_z_home) is not available in ccos yet".into()));
         }
         let (temp, smoothed, prev_target, sz) = {
             let c = self.core();
@@ -128,18 +150,21 @@ impl Exec {
         Ok(())
     }
 
-    /// `Homing::home_rails` for one axis (homing.cpp:87).
+    /// `Homing::home_rails` for one axis (homing.cpp:88). A failed homing is
+    /// not an error — the stock kinematics ignore the result and G28 goes on
+    /// with the next axis — except on Z, which shuts the printer down.
     fn home_rails(&mut self, a: usize) -> CmdResult {
         let ax = self.core().m.axes[a].clone();
-        // homing direction is negative on all axes: start "1.5 × range" away
-        let forcepos = ax.position_endstop + 1.5 * (ax.max - ax.position_endstop);
         self.wait_moves()?;
-        {
+        // homing direction is negative on all axes: start "1.5 × range" away
+        let (forcepos, movepos) = {
             let mut c = self.core();
-            let mut pos = c.commanded;
-            pos[a] = forcepos;
-            c.set_position_homed(pos, &[a]);
-        }
+            let (mut f, mut m) = (c.commanded, c.commanded);
+            f[a] = ax.position_endstop + 1.5 * (ax.max - ax.position_endstop);
+            m[a] = ax.position_endstop;
+            c.set_position_homed(f, &[a]);
+            (f, m)
+        };
         let prev_accel = self.core().planner.lim.max_accel;
         if let Some(acc) = ax.homing_accel {
             self.single(&format!("M204 S{acc:.2}"));
@@ -147,23 +172,29 @@ impl Exec {
         if let Some(hc) = ax.homing_current {
             self.single(&format!("SET_TMC_CURRENT_{} CURRENT={}", STEPPER_NAMES[a], cpp_to_string(hc)));
         }
-        let mut ok = self.homing_move(a, ax.position_endstop, ax.homing_speed)?;
-        if ok && ax.retract_dist != 0.0 {
-            // retract, pretend we are twice as far, home again slower
-            let mut pos = self.core().commanded;
-            pos[a] = ax.position_endstop + ax.retract_dist;
-            self.core().add_move(pos, ax.retract_speed, false)?;
+        let mut ok = self.homing_move(a, movepos, ax.homing_speed)?;
+        let move_d = (forcepos[a] - movepos[a]).abs();
+        let retract_to = |dist: f64| {
+            let mut p = movepos;
+            p[a] = movepos[a] + (forcepos[a] - movepos[a]) * (dist / move_d).min(1.0);
+            p
+        };
+        if ax.retract_dist.abs() > 1e-15 {
+            // retract, pretend to be twice as far, home again slower. After a
+            // failed first pass the axis is unhomed and both moves are dropped.
+            let retractpos = retract_to(ax.retract_dist);
+            self.core().add_move(retractpos, ax.retract_speed, true)?;
             self.wait_moves()?;
-            pos[a] += ax.retract_dist;
-            self.core().set_position(pos);
-            ok = self.homing_move(a, ax.position_endstop, ax.second_homing_speed)?;
+            let mut force2 = retractpos;
+            force2[a] += retractpos[a] - movepos[a];
+            self.core().set_position(force2);
+            ok = self.homing_move(a, movepos, ax.second_homing_speed)?;
         }
-        if ok && ax.force_retract != 0.0 {
-            let mut pos = self.core().commanded;
-            pos[a] = ax.position_endstop + ax.force_retract;
-            self.core().add_move(pos, ax.retract_speed, false)?;
+        if ax.force_retract.abs() > 1e-15 {
+            let retractpos = retract_to(ax.force_retract);
+            self.core().add_move(retractpos, ax.retract_speed, true)?;
             self.wait_moves()?;
-            self.core().set_position(pos);
+            self.core().set_position(retractpos);
         }
         // homing:home_rails_end → gcode_move
         self.reset_last_position();
@@ -174,82 +205,110 @@ impl Exec {
         if ax.homing_current.is_some() {
             self.single(&format!("SET_TMC_CURRENT_{}", STEPPER_NAMES[a]));
         }
-        if !ok {
-            super::console(&format!("Failed to home {}", ax.name.to_ascii_lowercase()));
-            let _ = self.core().motor_off();
-            if a == 2 {
-                self.invoke_shutdown("Z-axis zeroing failed");
-            }
-            return Err(Abort(format!("No trigger on {} after full movement", ax.name.to_ascii_lowercase())));
+        if !ok && a == 2 {
+            self.invoke_shutdown("Z-axis zeroing failed");
         }
         Ok(())
     }
 
-    /// One homing move towards the endstop, stopped by the MCU through
-    /// trsync. Ok(false) when the endstop never triggered.
-    fn homing_move(&mut self, a: usize, endstop: f64, speed: f64) -> Result<bool, Abort> {
+    /// `HomingMove::homing_move` (homing.cpp:522) with the stock trsync
+    /// protocol: `trsync_start` reporting every 0.1 s with a 0.25 s timeout
+    /// that trdispatch keeps extending, `endstop_home` sampling once per
+    /// motor step of the move (`calc_endstop_rate`), the move dripped out,
+    /// then `endstop_home` off and `trsync_trigger` to read the outcome.
+    /// Ok(false) (`is_succ`) when the endstop did not trigger: the axes are
+    /// then unhomed (`CoreXYKinematics::motor_off`, motors stay enabled).
+    fn homing_move(&mut self, a: usize, movepos: [f64; 4], speed: f64) -> Result<bool, Abort> {
         let ax = self.core().m.axes[a].clone();
         let ts = dsp::TRSYNC as i64;
-        let start = {
+        self.tmc_homing(a, true); // homing:homing_move_begin
+        let end_t = {
             let mut c = self.core();
             c.ui.set_status(format!("Homing {}…", ax.name));
-            c.responses.clear();
-            c.homing = true;
-            // like homing.py: start at get_last_move_time(), which on an idle
-            // toolhead is now + START_DELAY, so a resent frame is still in time
-            let t = c.last_move_time();
-            let m = c.mcu(Target::Dsp)?;
-            let c0 = m.clock.clock(t) as u32 as i64;
-            let (sample, rest) = (m.clock.ticks(15e-6) as i64, m.clock.ticks(1e-4) as i64);
-            let msgs = [m.encode("trsync_start", &[("oid", Arg::Int(ts)), ("report_clock", Arg::Int(0)), ("report_ticks", Arg::Int(0)), ("expire_reason", Arg::Int(4))])];
-            for msg in msgs {
-                m.queue_msg(msg);
+            c.flush_moves();
+            let start = c.commanded;
+            let print_time = c.last_move_time();
+            // calc_endstop_rate: one sample burst per motor step
+            let d: Vec<f64> = (0..3).map(|i| movepos[i] - start[i]).collect();
+            let move_t = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() / speed;
+            let mut max_steps = 0.0f64;
+            for &s in ax.steppers {
+                let def = &c.m.steppers[s];
+                let pos = |p: &[f64; 4]| (0..4).map(|k| def.kin[k] * p[k]).sum::<f64>();
+                max_steps = max_steps.max((pos(&start) - pos(&movepos)) / def.step_dist);
             }
+            let rest_time = if max_steps <= 0.0 { 0.001 } else { move_t / max_steps };
+            c.responses.retain(|(_, m)| m.name() != "trsync_state");
+            let m = c.mcu(Target::Dsp)?;
+            let clock = m.clock.clock(print_time);
+            let rest_ticks = m.clock.clock(print_time + rest_time) - clock;
+            let sample_ticks = m.clock.ticks(ENDSTOP_SAMPLE_TIME);
+            // MCU_trsync::start(print_time, TRSYNC_SINGLE_MCU_TIMEOUT)
+            let expire_ticks = m.clock.ticks(TRSYNC_SINGLE_MCU_TIMEOUT) as u64;
+            let expire_clock = clock + expire_ticks;
+            let report_ticks = m.clock.ticks(TRSYNC_SINGLE_MCU_TIMEOUT * 0.4);
+            let min_extend_ticks = m.clock.ticks(TRSYNC_SINGLE_MCU_TIMEOUT * 0.4 * 0.8) as u64;
+            let mut msgs = vec![m.encode(
+                "trsync_start",
+                &[("oid", Arg::Int(ts)), ("report_clock", Arg::Int(clock as u32 as i64)), ("report_ticks", Arg::Int(report_ticks as i64)), ("expire_reason", Arg::Int(REASON_COMMS_TIMEOUT))],
+            )];
             for &s in ax.steppers {
                 let oid = machine::dsp::STEP_A as i64 + s as i64;
-                let msg = m.encode("stepper_stop_on_trigger", &[("oid", Arg::Int(oid)), ("trsync_oid", Arg::Int(ts))]);
-                m.queue_msg(msg);
+                msgs.push(m.encode("stepper_stop_on_trigger", &[("oid", Arg::Int(oid)), ("trsync_oid", Arg::Int(ts))]));
             }
-            let msg = m.encode(
+            msgs.push(m.encode("trsync_set_timeout", &[("oid", Arg::Int(ts)), ("clock", Arg::Int(expire_clock as u32 as i64))]));
+            msgs.push(m.encode(
                 "endstop_home",
                 &[
                     ("oid", Arg::Int(ax.endstop_oid as i64)),
-                    ("clock", Arg::Int(c0)),
-                    ("sample_ticks", Arg::Int(sample)),
-                    ("sample_count", Arg::Int(4)),
-                    ("rest_ticks", Arg::Int(rest)),
-                    // triggered level: the pin's active level ("!PG4" = low)
+                    ("clock", Arg::Int(clock as u32 as i64)),
+                    ("sample_ticks", Arg::Int(sample_ticks as i64)),
+                    ("sample_count", Arg::Int(ENDSTOP_SAMPLE_COUNT)),
+                    ("rest_ticks", Arg::Int(rest_ticks as u32 as i64)),
+                    // triggered ^ invert ("!PG4" triggers low)
                     ("pin_value", Arg::Int((!ax.endstop.invert) as i64)),
                     ("trsync_oid", Arg::Int(ts)),
-                    ("trigger_reason", Arg::Int(1)),
+                    ("trigger_reason", Arg::Int(REASON_ENDSTOP_HIT)),
                 ],
-            );
-            m.queue_msg(msg);
-            let mut end = c.commanded;
-            let start = end[a];
-            end[a] = endstop;
-            if let Err(e) = c.add_move(end, speed, false) {
+            ));
+            for msg in msgs {
+                m.queue_msg(msg);
+            }
+            c.trdispatch = Some(TrDispatch {
+                target: Target::Dsp,
+                oid: dsp::TRSYNC,
+                can_trigger: true,
+                reason: REASON_HOST_REQUEST as u8,
+                expire_clock,
+                expire_ticks,
+                min_extend_ticks,
+                triggered: None,
+            });
+            c.homing = true;
+            c.dwell(HOMING_START_DELAY);
+            // drip_move
+            c.dwell(KIN_FLUSH_DELAY);
+            let r = c.add_move(movepos, speed, true);
+            c.flush_moves();
+            if let Err(e) = r {
                 c.homing = false;
+                c.trdispatch = None;
                 return Err(e.into());
             }
-            c.flush_moves();
-            let end_t = c.planner.print_time + 0.1;
-            let m = c.mcu(Target::Dsp)?;
-            let msg = m.encode("trsync_set_timeout", &[("oid", Arg::Int(ts)), ("clock", Arg::Int(m.clock.clock(end_t) as u32 as i64))]);
-            m.queue_msg(msg);
             c.wake();
-            start
+            c.planner.print_time
         };
-        let travel_t = (start - endstop).abs() / speed + 3.0;
-        let reason = self.p.wait(travel_t, "homing trigger", |c| {
-            let i = c.responses.iter().position(|(t, m)| *t == Target::Dsp && m.name() == "trsync_state" && m.int("can_trigger") == Some(0))?;
-            let (_, m) = c.responses.remove(i).unwrap();
-            Some(m.int("trigger_reason").unwrap_or(0))
-        });
+        // drip_move returns on a trigger, or once the last segment of the
+        // move has been generated (its end is less than the drip margin away)
+        let margin = machine::GEN_AHEAD_HOMING.1;
+        let wait = (end_t - crate::clock::now()).max(0.0) + 5.0;
+        self.p.wait(wait, "homing move", |c| (c.trdispatch.as_ref().is_some_and(|t| t.triggered.is_some()) || crate::clock::now() >= end_t - margin).then_some(()))?;
+        // home_wait: endstop off, trdispatch_stop, trsync stop
         {
             let mut c = self.core();
-            c.homing = false;
             c.stop_motion();
+            c.homing = false;
+            c.trdispatch = None;
             let m = c.mcu(Target::Dsp)?;
             for &s in ax.steppers {
                 m.withdraw(machine::dsp::STEP_A + s as u8);
@@ -268,36 +327,23 @@ impl Exec {
                 ],
             );
             m.queue_msg(msg);
-            for &s in ax.steppers {
-                let msg = m.encode("stepper_get_position", &[("oid", Arg::Int(machine::dsp::STEP_A as i64 + s as i64))]);
-                m.queue_msg(msg);
-            }
             c.wake();
         }
-        let mut positions = Vec::new();
+        let st = super::send_with_response(&self.p, Target::Dsp, "trsync_trigger", &[("oid", Arg::Int(ts)), ("reason", Arg::Int(REASON_HOST_REQUEST))], "trsync_state", ts)?;
+        let ok = st.int("trigger_reason") == Some(REASON_ENDSTOP_HIT);
+        // note_homing_end: where the MCU stopped each stepper
         for &s in ax.steppers {
             let oid = machine::dsp::STEP_A as i64 + s as i64;
-            let pos = self.p.wait(2.0, "stepper position", |c| {
-                let i = c.responses.iter().position(|(_, m)| m.name() == "stepper_position" && m.int("oid") == Some(oid))?;
-                let (_, m) = c.responses.remove(i).unwrap();
-                m.int("pos")
-            })?;
-            positions.push((s, pos));
+            let r = super::send_with_response(&self.p, Target::Dsp, "stepper_get_position", &[("oid", Arg::Int(oid))], "stepper_position", oid)?;
+            self.core().steppers[s].set_mcu_position(r.int("pos").unwrap_or(0));
         }
-        let reason = reason?;
-        let mut c = self.core();
-        for (s, pos) in positions {
-            c.steppers[s].set_mcu_position(pos);
+        self.core().set_position(movepos);
+        self.tmc_homing(a, false); // homing:homing_move_end
+        if !ok {
+            super::console(&format!("Failed to home {} (trigger reason {})", ax.name.to_ascii_lowercase(), st.int("trigger_reason").unwrap_or(0)));
+            self.core().homed = [false; 3];
         }
-        let mut p = c.stepper_position();
-        p[3] = c.commanded[3];
-        if reason != 1 {
-            c.set_position(p);
-            return Ok(false);
-        }
-        p[a] = endstop;
-        c.set_position(p);
-        Ok(true)
+        Ok(ok)
     }
 
     /// `M8233 S<zo> P<apply>` core: the user Z offset and the Z endstop
