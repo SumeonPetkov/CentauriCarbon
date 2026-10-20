@@ -11,7 +11,7 @@
 //! * what was printed: a 2 px/mm height map of the bed, bounding box,
 //!   layers, extruded length.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use crate::mcu::{Hardware, McuKind};
 use crate::tmc::{self, Tmc2209};
@@ -213,8 +213,24 @@ pub struct PrintStats {
     pub cold_extrusion_mm: f64,
     /// Bounding box of extrusion: x0, y0, x1, y1.
     pub bbox: Option<[f64; 4]>,
+    /// Heights (0.01 mm) where at least `LAYER_MIN_MM` of filament went
+    /// (pressure advance smoothing lets a trace out during Z moves).
     pub layers: Vec<f64>,
+    /// Filament per height, before it counts as a layer.
+    per_height: Vec<(f64, f64)>,
     pub max_z_printed: f64,
+}
+
+const LAYER_MIN_MM: f64 = 0.05;
+/// Nozzle flow lag (s): the stock pressure_advance value is tuned for it.
+pub const MELT_TAU: f64 = 0.04;
+/// Melt is laid down this far behind the newest step (longer than an MCU's
+/// burst of steps).
+const FLOW_LAG: f64 = 0.05;
+
+fn insert_by_time<T>(q: &mut VecDeque<(f64, T)>, e: (f64, T)) {
+    let i = q.iter().rposition(|x| x.0 <= e.0).map_or(0, |i| i + 1);
+    q.insert(i, e);
 }
 
 pub struct World {
@@ -237,6 +253,18 @@ pub struct World {
     pub faults: std::collections::HashSet<Fault>,
     pub raster: Vec<f32>,
     pub stats: PrintStats,
+    /// Molten filament in the nozzle not yet laid down (mm of filament).
+    pub melt: f64,
+    flow_t: f64,
+    unmarked: f64,
+    /// Filament fed (time, mm), and where the nozzle was (time, x/y/z),
+    /// not yet laid down: each MCU applies its steps in bursts, so they
+    /// arrive out of order across MCUs. `hist_base` is the position before
+    /// the first entry of `nozzle_hist`.
+    feed: VecDeque<(f64, f64)>,
+    nozzle_hist: VecDeque<(f64, [f64; 3])>,
+    hist_base: [f64; 3],
+    latest_t: f64,
     pub log: Vec<(f64, String)>,
     noise: u64,
     pub t: f64,
@@ -326,6 +354,13 @@ impl World {
             faults: Default::default(),
             raster: vec![f32::NAN; RASTER_SIZE * RASTER_SIZE],
             stats: PrintStats::default(),
+            melt: 0.0,
+            flow_t: 0.0,
+            unmarked: 0.0,
+            feed: VecDeque::new(),
+            nozzle_hist: VecDeque::new(),
+            hist_base: cfg.start,
+            latest_t: 0.0,
             log: Vec::new(),
             noise: 0x9e37_79b9_7f4a_7c15,
             t: 0.0,
@@ -354,6 +389,7 @@ impl World {
 
     /// Integrate heaters up to time `t`.
     pub fn advance_thermal(&mut self, t: f64) {
+        self.flow(t);
         let mut dt = (t - self.t).max(0.0) * self.cfg.thermal_speed;
         self.t = t;
         let amb = self.cfg.ambient;
@@ -414,18 +450,65 @@ impl World {
         }
     }
 
-    fn extrude(&mut self, de: f64) {
+    /// Filament fed by the extruder. Hot filament becomes melt in the
+    /// nozzle, which flows out with a lag (`deposit`); a retraction pulls
+    /// melt back.
+    fn extrude(&mut self, de: f64, t: f64) {
         self.e_mm += de;
         if de < 0.0 {
             self.stats.retracted_mm -= de;
-            return;
-        }
-        if self.hotend.temp < 170.0 {
+        } else if self.hotend.temp < 170.0 {
             self.stats.cold_extrusion_mm += de;
             return;
         }
-        self.stats.extruded_mm += de;
-        let [x, y, z] = self.pos;
+        insert_by_time(&mut self.feed, (t, de));
+    }
+
+    /// Melt flow up to `FLOW_LAG` behind the newest event, in time order.
+    fn flow(&mut self, t: f64) {
+        self.latest_t = self.latest_t.max(t);
+        let until = self.latest_t - FLOW_LAG;
+        while let Some(&(ft, de)) = self.feed.front() {
+            if ft > until {
+                break;
+            }
+            self.feed.pop_front();
+            self.deposit(ft);
+            self.melt += de;
+        }
+        self.deposit(until);
+    }
+
+    /// Where the nozzle was at `t` (forgets what came before).
+    fn nozzle_at(&mut self, t: f64) -> [f64; 3] {
+        while let Some(&(ht, p)) = self.nozzle_hist.front() {
+            if ht > t {
+                break;
+            }
+            self.nozzle_hist.pop_front();
+            self.hist_base = p;
+        }
+        self.hist_base
+    }
+
+    /// Melt flow up to time `t`: out at melt/τ (τ = MELT_TAU), laid down where
+    /// the nozzle was. Pressure advance exists to cancel this lag.
+    fn deposit(&mut self, t: f64) {
+        let [x, y, z] = self.nozzle_at(t);
+        let dt = (t - self.flow_t).max(0.0);
+        self.flow_t = self.flow_t.max(t);
+        if self.melt <= 0.0 || dt == 0.0 {
+            return;
+        }
+        let amount = self.melt * (1.0 - (-dt / MELT_TAU).exp());
+        self.melt -= amount;
+        self.stats.extruded_mm += amount;
+        // marked once 1e-4 mm has come out, however often this is called
+        self.unmarked += amount;
+        if self.unmarked < 1e-4 {
+            return;
+        }
+        let de = std::mem::take(&mut self.unmarked);
         let bb = self.stats.bbox.get_or_insert([x, y, x, y]);
         bb[0] = bb[0].min(x);
         bb[1] = bb[1].min(y);
@@ -433,7 +516,15 @@ impl World {
         bb[3] = bb[3].max(y);
         let zq = (z * 100.0).round() / 100.0;
         if !self.stats.layers.contains(&zq) {
-            self.stats.layers.push(zq);
+            let ph = &mut self.stats.per_height;
+            let i = ph.iter().position(|(h, _)| *h == zq).unwrap_or_else(|| {
+                ph.push((zq, 0.0));
+                ph.len() - 1
+            });
+            ph[i].1 += de;
+            if ph[i].1 >= LAYER_MIN_MM {
+                self.stats.layers.push(zq);
+            }
         }
         self.stats.max_z_printed = self.stats.max_z_printed.max(z);
         let px = (x * RASTER_PX_PER_MM).floor();
@@ -490,6 +581,7 @@ impl World {
 impl Hardware for World {
     fn step(&mut self, mcu: McuKind, step_pin: u32, dir: bool, t: f64) {
         let Some(Role::Step(i)) = self.roles.get(&(mcu, step_pin)).copied() else { return };
+        self.flow(t);
         let w = MOTORS[i];
         let scale = CFG_MICROSTEPS / self.tmc[i].microsteps() as f64;
         let m = &mut self.motors[i];
@@ -517,8 +609,9 @@ impl Hardware for World {
                     self.note_event(t, format!("nozzle pressed into the bed at x={:.1} y={:.1}", self.pos[0], self.pos[1]));
                 }
             }
-            _ => self.extrude(d as f64 * scale * w.step_dist),
+            _ => return self.extrude(d as f64 * scale * w.step_dist, t),
         }
+        insert_by_time(&mut self.nozzle_hist, (t, self.pos));
     }
 
     fn output(&mut self, mcu: McuKind, pin: u32, duty: f64, t: f64) {

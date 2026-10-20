@@ -374,9 +374,9 @@ pub const START_DELAY: f64 = 0.25;
 pub const GEN_AHEAD: (f64, f64) = (0.25, 0.5);
 /// Homing: the stock drip mode (`update_drip_move_time`) sends steps once
 /// they are less than DRIP_TIME + move_flush_time + kin_flush_delay away,
-/// DRIP_SEGMENT_TIME at a time.
-pub const GEN_AHEAD_HOMING: (f64, f64) = (DRIP_FLUSH_DELAY, DRIP_FLUSH_DELAY + 0.050);
-const DRIP_FLUSH_DELAY: f64 = 0.100 + 0.05 + 0.008576076596340965;
+/// DRIP_SEGMENT_TIME at a time. This is DRIP_TIME + move_flush_time.
+pub const DRIP_DELAY: f64 = 0.100 + 0.05;
+pub const DRIP_SEGMENT_TIME: f64 = 0.050;
 /// Planned motion buffered at most (`buffer_time_high`).
 pub const BUFFER_TIME_HIGH: f64 = 2.0;
 /// Klipper's default `max_stepper_error`.

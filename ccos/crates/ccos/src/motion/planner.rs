@@ -191,6 +191,10 @@ pub struct Segment {
     pub start_v: f64,
     pub cruise_v: f64,
     pub accel: f64,
+    /// Moves X/Y/Z (goes to the kinematic trapq).
+    pub kinematic: bool,
+    /// Extruding with X/Y motion: pressure advance applies.
+    pub can_pa: bool,
 }
 
 impl Segment {
@@ -234,13 +238,37 @@ pub struct Planner {
     /// End of the last committed move (print time).
     pub print_time: f64,
     pub segments: VecDeque<Segment>,
+    /// Committed since the core last took them (for the trapqs).
+    pub committed: Vec<Segment>,
     /// (callback token, print time) of committed moves' callbacks.
     pub fired: Vec<(u32, f64)>,
+    /// Steps were generated up to here assuming no more motion: a new
+    /// time line starts at least `kin_flush_delay` later.
+    pub min_restart: f64,
+    pub kin_flush_delay: f64,
 }
 
 impl Planner {
     pub fn new(lim: Limits) -> Self {
-        Self { lim, queue: VecDeque::new(), junction_flush: LOOKAHEAD_FLUSH_TIME, print_time: 0.0, segments: VecDeque::new(), fired: Vec::new() }
+        Self {
+            lim,
+            queue: VecDeque::new(),
+            junction_flush: LOOKAHEAD_FLUSH_TIME,
+            print_time: 0.0,
+            segments: VecDeque::new(),
+            committed: Vec::new(),
+            fired: Vec::new(),
+            min_restart: 0.0,
+            kin_flush_delay: 0.0,
+        }
+    }
+
+    /// `calc_print_time` when the time line restarts.
+    fn restart(&mut self, now: f64, start_delay: f64) {
+        if self.print_time < now + 0.05 {
+            self.print_time = self.print_time.max(now + start_delay);
+        }
+        self.print_time = self.print_time.max(self.min_restart + self.kin_flush_delay);
     }
 
     pub fn queued(&self) -> usize {
@@ -313,10 +341,8 @@ impl Planner {
         if update_flush_count || flush_count == 0 {
             return;
         }
-        if self.print_time < now + 0.05 {
-            // Idle (or fell behind): start a fresh buffer.
-            self.print_time = self.print_time.max(now + start_delay);
-        }
+        // Idle (or fell behind): start a fresh buffer.
+        self.restart(now, start_delay);
         for m in self.queue.drain(..flush_count) {
             let end = self.print_time + m.duration();
             for cb in &m.callbacks {
@@ -335,9 +361,12 @@ impl Planner {
                 start_v: m.start_v,
                 cruise_v: m.cruise_v,
                 accel: m.accel,
+                kinematic: m.is_kinematic,
+                can_pa: m.axes_r[3] > 0.0 && (m.axes_d[0].abs() > 1e-15 || m.axes_d[1] != 0.0),
             };
             self.print_time += m.duration();
             self.segments.push_back(seg);
+            self.committed.push(seg);
         }
     }
 
@@ -358,9 +387,7 @@ impl Planner {
     /// the look-ahead), or a fresh start point when idle.
     pub fn last_move_time(&mut self, now: f64, start_delay: f64) -> f64 {
         self.flush(false, now, start_delay);
-        if self.print_time < now + 0.05 {
-            self.print_time = self.print_time.max(now + start_delay);
-        }
+        self.restart(now, start_delay);
         self.print_time
     }
 
@@ -374,6 +401,7 @@ impl Planner {
     pub fn clear(&mut self) {
         self.queue.clear();
         self.segments.clear();
+        self.committed.clear();
         self.junction_flush = LOOKAHEAD_FLUSH_TIME;
     }
 

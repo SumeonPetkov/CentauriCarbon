@@ -26,9 +26,29 @@ use crate::heater::{Heater, PwmOut, MAX_HEAT_TIME};
 use crate::hw::Hardware;
 use crate::machine::{self, dsp, toolhead, FanCfg, Machine};
 use crate::mcu::{ntc_frac, ntc_temp, Mcu, Result};
+use crate::motion::itersolve::{Kin, StepperKin};
 use crate::motion::planner::{Move, Planner};
+use crate::motion::shaper::{self, Pulses};
 use crate::motion::stepper::{StepMsg, StepQueue};
+use crate::motion::trapq::TrapQ;
 use crate::Target;
+
+/// `SDS_CHECK_TIME`: the minimum `kin_flush_delay`.
+pub const SDS_CHECK_TIME: f64 = 0.008576076596340965;
+
+/// `[input_shaper]` state (input_shaper.cpp).
+#[derive(Debug, Clone, Copy)]
+pub struct ShaperState {
+    pub type_x: i32,
+    pub type_y: i32,
+    pub freq_x: f64,
+    pub freq_y: f64,
+    pub damping_x: f64,
+    pub damping_y: f64,
+    pub saved_freq_x: f64,
+    pub saved_freq_y: f64,
+    old_delay: f64,
+}
 
 /// Free move-queue slots on one MCU, tracked from the host side
 /// (Klipper's `steppersync`): a message may only be sent once the MCU has
@@ -104,6 +124,18 @@ pub struct Core {
     pub steppers: [StepQueue; 4],
     pub enabled: [bool; 4],
     pub planner: Planner,
+    /// Committed X/Y/Z motion and extruder motion (`trapq`s).
+    pub trapq: TrapQ,
+    pub etrapq: TrapQ,
+    /// Step solvers: A (x+y), B (x−y), Z, extruder.
+    pub kins: [StepperKin; 4],
+    /// Steps are generated this long behind the planned moves (the largest
+    /// shaper/pressure-advance window + SDS_CHECK_TIME).
+    pub kin_flush_delay: f64,
+    kin_flush_times: Vec<f64>,
+    pub shaper: ShaperState,
+    /// (pressure_advance, pressure_advance_smooth_time) as last set.
+    pub pressure_advance: (f64, f64),
     /// 0 = extruder, 1 = bed.
     pub heaters: [Heater; 2],
     pub chamber: Option<f64>,
@@ -231,9 +263,32 @@ fn steppers_new(m: &Machine) -> [StepQueue; 4] {
 impl Core {
     fn new(hw: Hardware, cfgs: Configs, ui: Ui, wake_fd: i32) -> Self {
         let m = Machine::from_config(&cfgs.printer);
-        Self {
+        // InputShaper::InputShaper (an unknown type name maps to 0, "zv")
+        let c = &cfgs.printer;
+        let ty = |k: &str| shaper::parse(&c.get_string("input_shaper", k, &c.get_string("input_shaper", "shaper_type", "mzv"))).unwrap_or(0);
+        let shaper = ShaperState {
+            type_x: ty("shaper_type_x"),
+            type_y: ty("shaper_type_y"),
+            freq_x: c.get_double("input_shaper", "shaper_freq_x", 0.0),
+            freq_y: c.get_double("input_shaper", "shaper_freq_y", 0.0),
+            damping_x: c.get_double("input_shaper", "damping_ratio_x", 0.1),
+            damping_y: c.get_double("input_shaper", "damping_ratio_y", 0.1),
+            saved_freq_x: 0.0,
+            saved_freq_y: 0.0,
+            old_delay: 0.0,
+        };
+        let has_shaper = c.has_section("input_shaper");
+        let pa = (m.extruder.pressure_advance, m.extruder.pressure_advance_smooth_time);
+        let mut core = Self {
             steppers: steppers_new(&m),
             planner: Planner::new(m.limits),
+            trapq: TrapQ::default(),
+            etrapq: TrapQ::default(),
+            kins: [StepperKin::new(Kin::CorexyPlus), StepperKin::new(Kin::CorexyMinus), StepperKin::new(Kin::Z), StepperKin::new(Kin::Extruder)],
+            kin_flush_delay: SDS_CHECK_TIME,
+            kin_flush_times: Vec::new(),
+            shaper,
+            pressure_advance: (0.0, 0.0),
             heaters: [Heater::new(m.heaters[0]), Heater::new(m.heaters[1])],
             fans: [Fan::new(m.fans[0]), Fan::new(m.fans[1]), Fan::new(m.fans[2]), Fan::new(m.hotend_fan), Fan::new(m.board_fan)],
             hw,
@@ -265,7 +320,109 @@ impl Core {
             ui_at: 0.0,
             exit: false,
             wake_fd,
+        };
+        // PrinterExtruder::PrinterExtruder, then InputShaper::connect
+        core.set_pressure_advance(pa.0, pa.1);
+        if has_shaper {
+            let s = core.shaper;
+            core.set_input_shaper(s.type_x, s.type_y, s.freq_x, s.freq_y, s.damping_x, s.damping_y);
         }
+        core
+    }
+
+    // ---- step generation set-up ----
+
+    /// `ToolHead::note_step_generation_scan_time`.
+    pub fn note_step_generation_scan_time(&mut self, delay: f64, old_delay: f64) {
+        self.flush_step_generation();
+        if old_delay != 0.0 {
+            if let Some(i) = self.kin_flush_times.iter().position(|d| *d == old_delay) {
+                self.kin_flush_times.remove(i);
+            }
+        }
+        if delay != 0.0 {
+            self.kin_flush_times.push(delay);
+        }
+        if let Some(max) = self.kin_flush_times.iter().copied().reduce(f64::max) {
+            self.kin_flush_delay = max + SDS_CHECK_TIME;
+        }
+        self.planner.kin_flush_delay = self.kin_flush_delay;
+    }
+
+    /// `PrinterExtruder::set_pressure_advance`.
+    pub fn set_pressure_advance(&mut self, pressure_advance: f64, smooth_time: f64) {
+        let old = if self.pressure_advance.0 <= 1e-15 { 0.0 } else { self.pressure_advance.1 };
+        let new = if pressure_advance <= 1e-15 { 0.0 } else { smooth_time };
+        self.note_step_generation_scan_time(new * 0.5, old * 0.5);
+        self.kins[3].set_pressure_advance(pressure_advance, new);
+        self.pressure_advance = (pressure_advance, smooth_time);
+    }
+
+    /// `InputShaper::set_input_shaper`. (The Y window is computed with the
+    /// X damping ratio, as the firmware does.)
+    pub fn set_input_shaper(&mut self, type_x: i32, type_y: i32, freq_x: f64, freq_y: f64, damping_x: f64, damping_y: f64) {
+        if type_x != self.shaper.type_x || type_y != self.shaper.type_y {
+            self.flush_step_generation();
+        }
+        let delay = Pulses::new(type_x, freq_x, damping_x).window().max(Pulses::new(type_y, freq_y, damping_x).window());
+        let old = self.shaper.old_delay;
+        self.note_step_generation_scan_time(delay, old);
+        let s = &mut self.shaper;
+        (s.old_delay, s.type_x, s.type_y, s.freq_x, s.freq_y, s.damping_x, s.damping_y) = (delay, type_x, type_y, freq_x, freq_y, damping_x, damping_y);
+        let (sx, sy) = (Pulses::new(type_x, freq_x, damping_x), Pulses::new(type_y, freq_y, damping_y));
+        for k in &mut self.kins {
+            k.set_shaper(sx, sy);
+        }
+    }
+
+    /// Committed planner moves into the trapqs (`trapq_append`,
+    /// `PrinterExtruder::move`).
+    fn drain_committed(&mut self) {
+        for s in std::mem::take(&mut self.planner.committed) {
+            if s.kinematic {
+                self.trapq.append(s.print_time, s.accel_t, s.cruise_t, s.decel_t, [s.start[0], s.start[1], s.start[2]], [s.axes_r[0], s.axes_r[1], s.axes_r[2]], s.start_v, s.cruise_v, s.accel);
+            }
+            let r = s.axes_r[3];
+            if r != 0.0 {
+                let pa = (s.can_pa as u8) as f64;
+                self.etrapq.append(s.print_time, s.accel_t, s.cruise_t, s.decel_t, [s.start[3], 0.0, 0.0], [1.0, pa, 0.0], s.start_v * r, s.cruise_v * r, s.accel * r);
+            }
+        }
+    }
+
+    /// itersolve every stepper up to `until`, then free what no solver needs.
+    fn gen_steps(&mut self, until: f64) {
+        self.drain_committed();
+        let t = now();
+        for (si, def) in self.m.steppers.iter().enumerate() {
+            let Some(mcu) = self.mcus[def.target as usize].as_ref() else {
+                self.kins[si].last_flush_time = until;
+                continue;
+            };
+            let est = cc_proto::clock::ClockEstimate { conv_time: t, conv_clock: mcu.clock.clock(t), freq: mcu.clock.freq };
+            let to_clock = move |pt: f64| est.clock_from_time(pt);
+            let tq = if si == 3 { &self.etrapq } else { &self.trapq };
+            self.kins[si].generate_steps(tq, until, &mut self.steppers[si], &to_clock);
+        }
+        self.gen_time = self.gen_time.max(until);
+        // (1 ns: the planner's end time and the sum of a move's pieces can
+        // differ in the last bit)
+        let free = until - self.kin_flush_delay + 1e-9;
+        self.trapq.free_moves(free);
+        self.etrapq.free_moves(free);
+    }
+
+    /// `ToolHead::flush_step_generation`: commit the look-ahead and generate
+    /// every step, the shaped/smoothed tail of the last move included; the
+    /// next move starts `kin_flush_delay` after that.
+    pub fn flush_step_generation(&mut self) {
+        self.planner.flush(false, now(), machine::START_DELAY);
+        let until = self.planner.print_time + self.kin_flush_delay;
+        if until > self.gen_time {
+            self.gen_steps(until);
+        }
+        self.planner.min_restart = self.planner.min_restart.max(self.gen_time);
+        self.wake();
     }
 
     /// Make the I/O thread run `service` now (after queueing messages).
@@ -356,10 +513,12 @@ impl Core {
 
     /// Define the toolhead position without moving (G92, homing).
     pub fn set_position(&mut self, pos: [f64; 4]) {
-        self.flush_moves();
+        // ToolHead::set_position: every step of the moves so far first
+        self.flush_step_generation();
+        self.trapq.clear();
+        self.etrapq.clear();
         for i in 0..4 {
-            let k = self.m.steppers[i].kin;
-            let mm: f64 = (0..4).map(|j| k[j] * pos[j]).sum();
+            let mm = self.kins[i].position_from_coord(pos);
             self.steppers[i].set_position_mm(mm);
         }
         self.commanded = pos;
@@ -389,8 +548,11 @@ impl Core {
     pub fn stop_motion(&mut self) {
         let t = now();
         self.planner.clear();
+        self.trapq.clear();
+        self.etrapq.clear();
         self.gen_time = self.gen_time.max(t);
         self.planner.print_time = self.gen_time;
+        self.planner.min_restart = self.planner.min_restart.max(self.gen_time);
         for s in &mut self.steppers {
             s.out.clear();
         }
@@ -405,6 +567,8 @@ impl Core {
     pub fn idle(&self) -> bool {
         self.planner.queued() == 0
             && now() > self.planner.print_time + 0.02
+            && self.trapq.is_empty()
+            && self.etrapq.is_empty()
             && self.steppers.iter().all(|s| s.out.is_empty())
             && self.mcus.iter().flatten().all(|m| m.backlog() == 0)
     }
@@ -581,35 +745,24 @@ impl Core {
         // Generate in chunks: each chunk boundary splits the step stream
         // into an extra queue_step per stepper, so refill only when the
         // buffer runs low (Klipper flushes in batches for the same reason).
-        let (low, high) = if self.homing { machine::GEN_AHEAD_HOMING } else { machine::GEN_AHEAD };
+        // Steps lag the planned moves by kin_flush_delay (a shaped position
+        // needs the moves after it); the last move's tail is generated once
+        // nothing is queued and the buffer runs out, and the next move then
+        // starts kin_flush_delay later (min_restart_time).
+        self.drain_committed();
+        let kfd = self.kin_flush_delay;
+        let (low, high) = if self.homing { (machine::DRIP_DELAY + kfd, machine::DRIP_DELAY + kfd + machine::DRIP_SEGMENT_TIME) } else { machine::GEN_AHEAD };
+        let pt = self.planner.print_time;
+        let tail = self.planner.queued() == 0 && pt < t + low + kfd;
+        let end = if tail { pt + kfd } else { pt - kfd };
         let start = self.gen_time.max(t - 1.0);
-        let until = (t + high).min(self.planner.print_time.max(start));
-        let behind_end = self.planner.print_time <= t + high;
+        let until = (t + high).min(end.max(start));
+        let behind_end = end <= t + high;
         if until > start && (start - t < low || behind_end && until - start > 0.005) {
-            let clocks: [Option<cc_proto::clock::ClockEstimate>; 3] = std::array::from_fn(|i| {
-                self.mcus[i].as_ref().map(|m| {
-                    let c = &m.clock;
-                    cc_proto::clock::ClockEstimate { conv_time: t, conv_clock: c.clock(t), freq: c.freq }
-                })
-            });
-            for seg in self.planner.segments.iter() {
-                if seg.end_time() <= start || seg.print_time >= until {
-                    continue;
-                }
-                for (si, def) in self.m.steppers.iter().enumerate() {
-                    let Some(est) = clocks[def.target as usize] else { continue };
-                    let c: f64 = (0..4).map(|k| def.kin[k] * seg.axes_r[k]).sum();
-                    if c == 0.0 {
-                        continue;
-                    }
-                    let m0: f64 = (0..4).map(|k| def.kin[k] * seg.start[k]).sum();
-                    let to_clock = move |pt: f64| est.clock_from_time(pt);
-                    for (t0, dur, d0, v0, a) in seg.phases() {
-                        self.steppers[si].gen_phase(t0, dur, m0 + c * d0, c, v0, a, start, until, &to_clock);
-                    }
-                }
+            self.gen_steps(until);
+            if until > pt - kfd {
+                self.planner.min_restart = self.planner.min_restart.max(until);
             }
-            self.gen_time = until;
         }
         let mut batch = std::mem::take(&mut self.batch);
         for (si, def) in self.m.steppers.iter().enumerate() {

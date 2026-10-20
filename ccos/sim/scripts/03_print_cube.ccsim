@@ -20,6 +20,7 @@ expect bbox_y1 > 137.9
 expect bbox_y1 < 138.3
 # 6 heights: prime line + 5 layers; with no bed mesh the nozzle sits
 # fix_z_offset (0.15) higher than commanded, like the stock firmware
+show layer_heights extruded retracted
 expect layers == 6
 expect max_z > 1.14
 expect max_z < 1.16

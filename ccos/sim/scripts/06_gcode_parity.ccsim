@@ -45,6 +45,43 @@ expect light == 1
 gcode SET_LED_led2 RED=0 TRANSMIT=1
 wait_until light == 0 timeout 2
 
+# pressure advance and input shaping start from printer.cfg
+expect pressure_advance == 0.04
+expect smooth_time == 0.01
+expect shaper_type_x == "mzv"
+expect shaper_type_y == "zv"
+expect shaper_freq_x == 54.8
+expect damping_y == 0.082
+# step generation runs smooth_time / 2 behind (+ SDS_CHECK_TIME)
+gcode SET_PRESSURE_ADVANCE ADVANCE=0.05 SMOOTH_TIME=0.2
+wait 0.5
+expect pressure_advance == 0.05
+expect kin_flush_delay > 0.1085
+expect kin_flush_delay < 0.1086
+# out of range: error, then the current value is kept
+gcode SET_PRESSURE_ADVANCE SMOOTH_TIME=0.3
+wait 0.5
+expect console ~ "SMOOTH_TIMEmust have maximum"
+expect smooth_time == 0.2
+# M900 without K: printer.cfg's value; the smooth time is kept
+gcode M900
+wait 0.5
+expect pressure_advance == 0.04
+expect smooth_time == 0.2
+# SHAPER_TYPE_X is ignored (the stock `if (shaper_type_x = -1)`), SHAPER_TYPE is not
+gcode SET_INPUT_SHAPER SHAPER_TYPE_X=ei SHAPER_FREQ_X=60
+wait 0.5
+expect shaper_type_x == "mzv"
+expect shaper_freq_x == 60
+gcode SET_INPUT_SHAPER SHAPER_TYPE=ei
+wait 0.5
+expect shaper_type_x == "ei"
+expect shaper_type_y == "ei"
+gcode SET_INPUT_SHAPER SHAPER_TYPE=mzv SHAPER_FREQ_X=54.8
+gcode SET_PRESSURE_ADVANCE ADVANCE=0.04 SMOOTH_TIME=0.01
+wait 0.5
+expect kin_flush_delay < 0.03
+
 # ROOT gate: M8xxx in a file only run after ROOT
 print root_gate.gcode
 wait_until print_state == "Finished" timeout 30

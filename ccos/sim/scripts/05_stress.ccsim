@@ -18,7 +18,9 @@ wait_until print_state == "Finished" timeout 240
 expect bbox_x0 > 9.9
 expect bbox_x1 > 199.9
 expect bbox_x1 < 200.1
-expect bbox_y1 > 99.9
+# the last line ends at Y100 and a retract follows; smoothed pressure advance
+# starts that retract smooth_time/2 early, so the trace stops ~0.1 mm short
+expect bbox_y1 > 99.75
 expect bbox_y1 < 100.1
 expect cold_extrusion == 0
 expect lost_steps == 0

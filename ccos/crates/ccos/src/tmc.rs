@@ -24,7 +24,8 @@ use crate::config::Config;
 
 pub const TMC_FREQUENCY: f64 = 12_000_000.0;
 pub const TMC_BAUD_RATE: f64 = 20_000.0;
-const MAX_CURRENT: f64 = 2.0;
+/// Upper bound of `SET_TMC_CURRENT` (`get_current`'s return value).
+pub const MAX_CURRENT: f64 = 2.0;
 /// Sync byte the stock driver sends (TMC sync nibble 0x5 + reserved bits).
 const SYNC: u8 = 0xf5;
 
@@ -257,13 +258,8 @@ impl FieldHelper {
         let reg = self.lookup_register(field).unwrap_or("");
         let mask = field_mask(reg, field);
         let maxval = (mask >> ffs(mask)) as i64;
-        let v = if maxval == 1 {
-            c.get_bool(section, &key, default != 0) as i64
-        } else if SIGNED_FIELDS.contains(&field) {
-            c.get_int(section, &key, default).clamp(-(maxval / 2 + 1), maxval / 2)
-        } else {
-            c.get_int(section, &key, default).clamp(0, maxval)
-        };
+        // the firmware's config reader only logs an out-of-range value
+        let v = if maxval == 1 { c.get_bool(section, &key, default != 0) as i64 } else { c.get_int(section, &key, default) };
         self.set_field(field, v)
     }
 }
@@ -378,11 +374,11 @@ impl Tmc {
         let name = section.split(' ').next_back().unwrap_or("").to_string();
         let stepper_section: String = section.split(' ').skip(1).collect();
         let mut f = FieldHelper::default();
-        let addr = c.get_int(section, "uart_address", 0).clamp(0, 3) as u8;
+        let addr = c.get_int(section, "uart_address", 0) as u8;
         f.set_field("senddelay", 2);
-        // TMCCurrentHelper
-        let run_current = c.get_double(section, "run_current", 1.0).clamp(0.0, MAX_CURRENT);
-        let hold_current = c.get_double(section, "hold_current", run_current).clamp(0.0, MAX_CURRENT);
+        // TMCCurrentHelper (range errors are only logged by the firmware)
+        let run_current = c.get_double(section, "run_current", 1.0);
+        let hold_current = c.get_double(section, "hold_current", run_current);
         let sense_resistor = c.get_double(section, "sense_resistor", 0.110);
         let sgthrs_home = c.get_int(section, "driver_sgthrs", 0);
         let (vsense, irun, ihold) = calc_current(sense_resistor, run_current, hold_current);

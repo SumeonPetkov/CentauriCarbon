@@ -124,7 +124,6 @@ pub struct Exec {
     saved: HashMap<String, GState>,
     plane: Plane,
     limits: Limits,
-    pressure_advance: (f64, f64),
     /// printer_para ROOT flag.
     is_root: bool,
     /// The command being executed came from the print file.
@@ -292,7 +291,7 @@ pub const COMMANDS: &[&str] = &[
 ];
 
 /// Commands that exist on the printer but whose subsystem ccos does not
-/// have yet (load cells, bed mesh, accelerometer, input shaper,
+/// have yet (load cells, bed mesh, accelerometer,
 /// power-loss resume). They are accepted and logged.
 pub const NOT_YET: &[(&str, &str)] = &[
     ("ACCELEROMETER_MEASURE_X", "accelerometer"),
@@ -321,8 +320,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("QUERY_PROBE", "load-cell probing"),
     ("READ_HX711", "load-cell probing"),
     ("SDCARD_PRINT_FILE_BREAK_SAVE", "power-loss resume"),
-    ("SET_INPUT_SHAPER", "input shaper"),
-    ("M593", "input shaper"),
     ("SHAPER_CALIBRATE", "accelerometer"),
     ("SHAPER_CALIBRATE_SCRIPT", "accelerometer"),
     ("STOP_RESUME", "power-loss resume"),
@@ -334,12 +331,9 @@ pub const NOT_YET: &[(&str, &str)] = &[
 impl Exec {
     pub fn new(p: Shared, ctl: Arc<Control>, jobs: Option<Receiver<Job>>) -> Self {
         let tmc = Self::tmc_load(&p);
-        let (limits, pa) = {
+        let limits = {
             let c = p.lock();
-            (
-                Limits { max_velocity_limit: c.m.limits.max_velocity, max_accel_limit: c.m.limits.max_accel, requested_accel_to_decel: c.m.limits.max_accel_to_decel },
-                (c.m.extruder.pressure_advance, c.m.extruder.pressure_advance_smooth_time),
-            )
+            Limits { max_velocity_limit: c.m.limits.max_velocity, max_accel_limit: c.m.limits.max_accel, requested_accel_to_decel: c.m.limits.max_accel_to_decel }
         };
         Self {
             p,
@@ -356,7 +350,6 @@ impl Exec {
             saved: HashMap::new(),
             plane: Plane::Xy,
             limits,
-            pressure_advance: pa,
             is_root: false,
             from_file: false,
             print: print::PrintState::default(),
@@ -540,7 +533,7 @@ impl Exec {
                 Ok(())
             }
             // input shaper (values kept; shaping itself is not in ccos yet)
-            "SET_INPUT_SHAPER" | "M593" => Ok(()),
+            "SET_INPUT_SHAPER" | "M593" => self.cmd_set_input_shaper(g),
             // homing
             "G28" => self.cmd_g28(g, false),
             "CUSTOM_ZERO" => self.cmd_g28(g, true),

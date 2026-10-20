@@ -26,8 +26,6 @@ const HOMING_START_DELAY: f64 = 0.001;
 const ENDSTOP_SAMPLE_TIME: f64 = 0.000015;
 const ENDSTOP_SAMPLE_COUNT: i64 = 4;
 const TRSYNC_SINGLE_MCU_TIMEOUT: f64 = 0.250;
-/// `kin_flush_delay` = SDS_CHECK_TIME.
-const KIN_FLUSH_DELAY: f64 = 0.008576076596340965;
 const REASON_ENDSTOP_HIT: i64 = 1;
 const REASON_COMMS_TIMEOUT: i64 = 2;
 const REASON_HOST_REQUEST: i64 = 3;
@@ -287,7 +285,8 @@ impl Exec {
             c.homing = true;
             c.dwell(HOMING_START_DELAY);
             // drip_move
-            c.dwell(KIN_FLUSH_DELAY);
+            let kfd = c.kin_flush_delay;
+            c.dwell(kfd);
             let r = c.add_move(movepos, speed, true);
             c.flush_moves();
             if let Err(e) = r {
@@ -300,7 +299,7 @@ impl Exec {
         };
         // drip_move returns on a trigger, or once the last segment of the
         // move has been generated (its end is less than the drip margin away)
-        let margin = machine::GEN_AHEAD_HOMING.1;
+        let margin = machine::DRIP_DELAY + machine::DRIP_SEGMENT_TIME + self.core().kin_flush_delay;
         let wait = (end_t - crate::clock::now()).max(0.0) + 5.0;
         self.p.wait(wait, "homing move", |c| (c.trdispatch.as_ref().is_some_and(|t| t.triggered.is_some()) || crate::clock::now() >= end_t - margin).then_some(()))?;
         // home_wait: endstop off, trdispatch_stop, trsync stop

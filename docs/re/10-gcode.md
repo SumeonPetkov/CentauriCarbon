@@ -14,6 +14,7 @@ listed under [Deliberate differences](#deliberate-differences).
 | `gcode/mod.rs` | `gcode.cpp` dispatch, `idle_timeout.cpp`, `heaters.cpp` M105/TURN_OFF_HEATERS |
 | `gcode/cmds.rs` | `gcode_move.cpp`, `toolhead.cpp`, `extruder.cpp`, `heaters.cpp`, `pid_calibrate.cpp`, `fan*.cpp`, `led.cpp`, `stepper_enable.cpp`, `arcs.cpp` |
 | `gcode/home.rs` | `homing.cpp`, `safe_z_home.cpp`, `kinematics/corexy.cpp` (homing), `mcu_io.cpp` (trsync/endstop), `chelper/trdispatch.c` (in `core.rs`) |
+| `motion/trapq.rs`, `itersolve.rs`, `shaper.rs`; `core.rs` (flush timing) | `chelper/trapq.c`, `itersolve.c`, `kin_corexy.c`, `kin_shaper.c`, `kin_extruder.c`; `toolhead.cpp`, `extras/input_shaper.cpp`, `kinematics/extruder.cpp` |
 | `tmc.rs` + `gcode/tmc.rs` | `tmc.cpp`, `tmc2208.cpp`, `tmc2209.cpp`, `tmc_uart.cpp`, `serialhdl.cpp` (`send_with_response`) |
 | `gcode/print.rs` | `virtual_sdcard.cpp`, `print_stats.cpp`, `pause_resume.cpp`, `change_filament.cpp`, `auto_leveling.cpp` (M729, WIPE_NOZZLE, G29.1) |
 | `gcode/para.rs` + `para_table.rs` | `printer_para.cpp` (ROOT, UNROOT, M8000–M8826) |
@@ -64,6 +65,7 @@ Exactly `gcode.cpp`:
 | Homing | G28 CUSTOM_ZERO Z_AXIS_OFF_LIMIT_ACTION |
 | TMC2209 | SET_TMC_CURRENT_stepper_x/_y/_z/_extruder INIT_TMC SET_TMC_FIELD DUMP_TMC |
 | Extruder | SET_PRESSURE_ADVANCE M900 SET_EXTRUDER_STEP_DISTANCE SET_MIN_EXTRUDE_TEMP FLOW_CALIBRATION ACTIVATE_EXTRUDER RESET_EXTRUDER |
+| Input shaper | SET_INPUT_SHAPER M593 |
 | Heaters | M104 M109 M140 M190 M105 SET_HEATER_TEMPERATURE TEMPERATURE_WAIT TURN_OFF_HEATERS M301 M130 M131 M132 PID_CALIBRATE PID_CALIBRATE_ALL PID_CALIBRATE_HOTBED PID_CALIBRATE_NOZZLE |
 | Fans, LEDs | M106 M107 SET_FAN_SPEED SET_LED_led1 SET_LED_led2 |
 | Print job | SDCARD_PRINT_FILE SDCARD_RESET_FILE SET_PRINT_STATS_INFO M117 PAUSE RESUME CLEAR_PAUSE CANCEL_PRINT STOP_PRINT M75 M76 M77 M601 M602 M603 |
@@ -78,7 +80,7 @@ subsystem behind them. They are accepted, do nothing, and log
 |---|---|
 | Load-cell probing | G29 PROBE PROBE_ACCURACY PROBE_CALIBRATE QUERY_PROBE CALIBRATE_Z_OFFSET CHECK_BED_MESH HOME_ACCURACY LIFT_HOT_BED MEASURE_GAP_TEST NOZZLE_CLEAR PRTOUCH_READY READ_HX711 STRAINGAUGE_TEST STRAINGAUGE_Z_HOME BED_MESH_CALIBRATE |
 | Bed mesh | BED_MESH_MAP BED_MESH_OFFSET BED_MESH_OUTPUT BED_MESH_SET_INDEX |
-| Accelerometer / input shaper | SET_INPUT_SHAPER M593 SHAPER_CALIBRATE SHAPER_CALIBRATE_SCRIPT TEST_RESONANCES MEASURE_AXES_NOISE ACCELEROMETER_MEASURE_X ACCELEROMETER_QUERY_X ADXL345_DEBUG_READ_X ADXL345_DEBUG_WRITE_X |
+| Accelerometer | SHAPER_CALIBRATE SHAPER_CALIBRATE_SCRIPT TEST_RESONANCES MEASURE_AXES_NOISE ACCELEROMETER_MEASURE_X ACCELEROMETER_QUERY_X ADXL345_DEBUG_READ_X ADXL345_DEBUG_WRITE_X |
 | Power-loss resume | BREAK_SAVE_STATUS SDCARD_PRINT_FILE_BREAK_SAVE STOP_RESUME |
 | Other | DIRZCTL |
 
@@ -137,6 +139,33 @@ BED_MESH_PROFILE.
     `kin_flush_delay`. Steps are dripped 0.16–0.21 s ahead.
   - The outcome comes from `trsync_trigger reason=3`, then
     `stepper_get_position`.
+- **Step generation** (`motion/trapq.rs`, `itersolve.rs`, `shaper.rs`)
+  is the stock C helper code ported: committed moves go into a trapq;
+  each stepper's position is a function of print time; a secant search
+  finds each crossing of the middle between two steps.
+  - The CoreXY A and B motors run x ± y of the **input-shaped** X and Y.
+    Stock: MZV at 54.8 Hz with damping 0.06 on X, ZV at 46.4 Hz with
+    damping 0.082 on Y.
+  - The extruder runs smoothed **pressure advance**: 0.04 over 0.01 s.
+    It applies only to moves that extrude while moving X/Y.
+    `pressure_advance_smooth_time: 0.01` is below the firmware's own
+    minimum of 0.02. The config reader only logs that, so 0.01 is used.
+  - Steps are generated `kin_flush_delay` behind the planned moves:
+    the larger shaper window, or half the smooth time, plus 8.6 ms.
+    Once nothing more is queued, the last move's tail is generated and
+    the next move starts at least that much later (`min_restart_time`).
+- **SET_PRESSURE_ADVANCE / M900 / SET_INPUT_SHAPER.**
+  - A change that alters `kin_flush_delay` flushes step generation
+    first, so it causes a short pause in a print, as on the stock
+    firmware.
+  - `M900 K` defaults to printer.cfg's `pressure_advance`, or 0.03 if
+    there is none.
+  - `SET_INPUT_SHAPER` and `M593` are one command. The firmware tests
+    `if (shaper_type_x = -1)`, an assignment, so `SHAPER_TYPE_X` and
+    `SHAPER_TYPE_Y` never take effect; only `SHAPER_TYPE` changes the
+    type.
+  - The Y step-generation window is computed with the X damping ratio.
+  - Neither command replies.
 - **Failed homing.**
   - The axes become unhomed (`CoreXYKinematics::motor_off`), but the
     motors stay enabled.
@@ -221,7 +250,6 @@ BED_MESH_PROFILE.
 | M8810 | exports logs | logs "not available" | the log files are those of the stock app |
 | TMC register read failing 5 times | logs, then returns an undefined value | an error: `INIT_TMC`/`DUMP_TMC` fail; at connect "TMC <name> failed to init" is logged and the next driver is set up | undefined behaviour |
 | TMC drivers with motion locked | — | not configured (`CCOS_ENABLE_MOTION` unset: ccos drives no motor outputs) | safety on the real printer |
-| SET_PRESSURE_ADVANCE / M900 | applied by the extruder kinematics | value stored, not applied to motion | phase 2 |
 | Bed mesh | Z compensation from the probed mesh | none, so the nozzle sits `fix_z_offset` (0.15 mm) higher than the stock firmware with a mesh | phase 2 |
 
 ## Tests

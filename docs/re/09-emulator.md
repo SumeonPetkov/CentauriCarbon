@@ -81,7 +81,13 @@ cover. The toolhead link is throttled to 100 kB/s and the load-cell board to
   (β 4300 / 3950) on 4.7 kΩ pull-ups into 12-bit ADCs with noise.
 * Outputs: part/hotend/aux/chamber/board fans, chamber light.
 * A 2 px/mm height map of everything extruded through a hot nozzle, layers,
-  bounding box, cold extrusion, retraction.
+  bounding box, cold extrusion, retraction. Filament pushed into the hot
+  nozzle leaves it with a 40 ms lag (first-order melt flow,
+  `MELT_TAU`), so a pressure-advance pulse is not deposited the instant it
+  is fed, and a line ends a little after the feed stops, as on a real
+  nozzle. Each virtual MCU applies its steps in bursts, so the extruder
+  and the carriage arrive out of order; melt is laid down 50 ms behind,
+  in time order, where the nozzle was at that moment.
 
 **Faults** to inject: `hotend_heater_dead`, `bed_heater_dead`,
 `hotend_thermistor_open`, `hotend_thermistor_short`, `bed_thermistor_open`,
@@ -101,8 +107,9 @@ The emulator needed — and drove — the printing core:
   held until a move-queue slot frees (`min_clock`), clock sync à la
   `clocksync.py`.
 * `motion/planner.rs`: Klipper's look-ahead (junction deviation, smoothed
-  acceleration), `motion/stepper.rs`: closed-form step times per move phase
-  and `queue_step` compression within 25 µs.
+  acceleration); `motion/itersolve.rs`: the stock step-time solver with
+  input shaping and pressure advance; `motion/stepper.rs`: `queue_step`
+  compression within 25 µs.
 * `heater.rs`: the stock PID (1 s derivative smoothing), `verify_heater`
   (including the < −20 °C thermistor check), autotune; heater outputs with
   `max_duration` 5 s; ADC range limits from `min_temp`/`max_temp`.
@@ -128,7 +135,7 @@ The emulator needed — and drove — the printing core:
 | `04_faults` | open thermistor → host *thermistor fault* (stock `min_temp` is −200, so the MCU range check cannot fire); dead heater → *not heating at expected rate*; USB unplugged → MCU *Missed scheduling…* then host *no response*; restart after each; unhomed move silently dropped; out-of-range target only warned |
 | `05_stress` | G2 arcs and a 300 mm/s zig-zag while 1 in 2000 bytes are corrupted: retransmits happen, nothing is lost or late |
 | `07_tmc` | TMC2209 register images after connect, SET_TMC_CURRENT, INIT_TMC/SET_TMC_FIELD answered by the extruder driver, StallGuard on/off around homing, a broken X DIAG: X fails, G28 goes on with Y |
-| `06_gcode_parity` | stock parser/console behaviour (unknown commands, M21 silent, range error text, upper-casing), M106 P/S rules, SET_LED TRANSMIT, the ROOT gate in a file, PAUSE/RESUME/CANCEL_PRINT during a print |
+| `06_gcode_parity` | stock parser/console behaviour (unknown commands, M21 silent, range error text, upper-casing), M106 P/S rules, SET_LED TRANSMIT, SET_PRESSURE_ADVANCE/M900 and `kin_flush_delay`, SET_INPUT_SHAPER (SHAPER_TYPE_X ignored as in the stock code), the ROOT gate in a file, PAUSE/RESUME/CANCEL_PRINT during a print |
 
 Example:
 
@@ -150,8 +157,13 @@ bedshot shots/cube_bed.png
 * The TMC2209 model has no current or load physics: StallGuard is ideal
   once enabled (no false or late stall detection), and the run current
   changes nothing.
-* No load-cell model (bed mesh, probing) and no input shaping/pressure
-  advance in ccos yet (phase 2 of [10](10-gcode.md)).
+* No load-cell model (bed mesh, probing) and no resonance model: input
+  shaping changes the step times ccos sends, but the emulated machine has
+  no ringing to cancel.
+* `layers` counts a height once 0.05 mm of filament went there: pressure
+  advance and the melt lag let a trace out while Z is still moving.
+* The melt model is one time constant, not a pressure model: it will not
+  show whether a pressure-advance value is right for a filament.
 * The `console` probe reads a process-wide ring of the last 256 console
   lines; when scripts run in parallel (`cargo test`), use text unique to
   the script.

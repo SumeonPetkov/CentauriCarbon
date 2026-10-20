@@ -341,16 +341,41 @@ impl Exec {
         self.set_temperature(0, s, wait)
     }
 
+    /// `SET_PRESSURE_ADVANCE [ADVANCE=] [SMOOTH_TIME=]` (no reply). Changing
+    /// it flushes step generation, like any change of `kin_flush_delay`.
     pub(super) fn cmd_set_pressure_advance(&mut self, g: &GCmd) -> CmdResult {
-        let adv = g.get_double("ADVANCE", self.pressure_advance.0, Lim::min(0.0))?;
-        let st = g.get_double("SMOOTH_TIME", self.pressure_advance.1, Lim::min_max(0.0, 0.2))?;
-        self.pressure_advance = (adv, st);
+        let (pa, st) = self.core().pressure_advance;
+        let adv = g.get_double("ADVANCE", pa, Lim::min(0.0))?;
+        let st = g.get_double("SMOOTH_TIME", st, Lim::min_max(0.0, 0.2))?;
+        self.core().set_pressure_advance(adv, st);
         Ok(())
     }
 
+    /// `M900 K<advance>`: K defaults to printer.cfg's value (0.03 without one).
     pub(super) fn cmd_m900(&mut self, g: &GCmd) -> CmdResult {
-        let def = self.core().m.extruder.pressure_advance;
-        self.pressure_advance.0 = g.get_double("K", def, Lim::min(0.0))?;
+        let (def, st) = {
+            let c = self.core();
+            (c.cfgs.printer.get_double("extruder", "pressure_advance", 0.03), c.pressure_advance.1)
+        };
+        let k = g.get_double("K", def, Lim::min(0.0))?;
+        self.core().set_pressure_advance(k, st);
+        Ok(())
+    }
+
+    /// `SET_INPUT_SHAPER` / `M593` (input_shaper.cpp). The firmware tests
+    /// `if (shaper_type_x = -1)` — an assignment — so SHAPER_TYPE_X/_Y never
+    /// take effect; only SHAPER_TYPE changes the type. No reply.
+    pub(super) fn cmd_set_input_shaper(&mut self, g: &GCmd) -> CmdResult {
+        let s = self.core().shaper;
+        let dx = g.get_double("DAMPING_RATIO_X", s.damping_x, Lim::min_max(0.0, 1.0))?;
+        let dy = g.get_double("DAMPING_RATIO_Y", s.damping_y, Lim::min_max(0.0, 1.0))?;
+        let fx = g.get_double("SHAPER_FREQ_X", s.freq_x, Lim::min(0.0))?;
+        let fy = g.get_double("SHAPER_FREQ_Y", s.freq_y, Lim::min(0.0))?;
+        let (tx, ty) = match crate::motion::shaper::parse(&g.get_string("SHAPER_TYPE", "")) {
+            Some(t) => (t, t),
+            None => (s.type_x, s.type_y),
+        };
+        self.core().set_input_shaper(tx, ty, fx, fy, dx, dy);
         Ok(())
     }
 

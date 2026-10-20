@@ -147,7 +147,7 @@ impl Exec {
     /// parameters the configured currents are restored. Reports the
     /// currents before a restore, after a change.
     fn cmd_set_tmc_current(&mut self, i: usize, g: &GCmd) -> CmdResult {
-        let max = 2.0;
+        let max = crate::tmc::MAX_CURRENT;
         let (mut prev_run, mut prev_hold) = self.tmc[i].get_current();
         let mut run = g.get_double("CURRENT", DBL_MIN, Lim::min_max(0.0, max))?;
         let mut hold = g.get_double("HOLDCURRENT", DBL_MIN, Lim { min: Some(0.0), max: Some(max), above: Some(0.0), below: None })?;

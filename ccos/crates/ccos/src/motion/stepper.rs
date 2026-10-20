@@ -1,12 +1,10 @@
-//! Step generation and compression for one stepper.
+//! Step queue and compression for one stepper.
 //!
-//! The motor's position along a planned move phase is quadratic in time,
-//! so step times are solved in closed form (a step is taken when the
-//! commanded position crosses the middle between two step positions, as in
-//! Klipper's `itersolve`). Step times are then packed into `queue_step`
-//! messages — `count` steps at `last + k·interval + add·k(k-1)/2` — each
-//! step within `max_error` *before* its exact time (Klipper's
-//! `stepcompress.c` contract, default 25 µs).
+//! Step times come from [`super::itersolve`] (one per crossing of the middle
+//! between two step positions). They are packed into `queue_step` messages —
+//! `count` steps at `last + k·interval + add·k(k-1)/2` — each step within
+//! `max_error` *before* its exact time (Klipper's `stepcompress.c`
+//! contract, default 25 µs).
 
 use cc_proto::dict::Arg;
 use cc_proto::{Dictionary, MsgBuf};
@@ -72,7 +70,8 @@ impl StepQueue {
             sent_dir: None,
             need_reset: true,
             pending: Vec::with_capacity(4096),
-            pending_dir: true,
+            // stepcompress starts with next_step_dir 0
+            pending_dir: false,
             out: Vec::with_capacity(256),
             steps_generated: 0,
         }
@@ -100,50 +99,20 @@ impl StepQueue {
         self.need_reset = true;
     }
 
-    /// Generate steps for one move phase.
-    ///
-    /// The motor position is `m0 + c·d(τ)` with `d(τ) = v0·τ + a·τ²/2` for
-    /// `τ ∈ [0, dur]` from print time `t0`; only crossings inside the print
-    /// time window `[ws, we]` are produced. `to_clock` maps print time to
-    /// this stepper's MCU clock.
-    #[allow(clippy::too_many_arguments)]
-    pub fn gen_phase(&mut self, t0: f64, dur: f64, m0: f64, c: f64, v0: f64, a: f64, ws: f64, we: f64, to_clock: &dyn Fn(f64) -> u64) {
-        if c == 0.0 || dur <= 0.0 {
-            return;
-        }
-        let ts = (ws - t0).max(0.0);
-        let te = (we - t0).min(dur);
-        if te <= ts {
-            return;
-        }
-        let dir = c > 0.0;
-        let d_end = v0 * te + 0.5 * a * te * te;
-        let sd = self.step_dist;
-        loop {
-            let n = self.step_pos as f64;
-            let target = if dir { (n + 0.5) * sd } else { (n - 0.5) * sd } + self.mm_offset;
-            let dstar = (target - m0) / c;
-            if dstar > d_end + 1e-12 {
-                break;
-            }
-            let dstar = dstar.max(0.0);
-            let tau = if a == 0.0 {
-                if v0 <= 0.0 {
-                    break;
-                }
-                dstar / v0
-            } else {
-                let disc = (v0 * v0 + 2.0 * a * dstar).max(0.0);
-                let den = v0 + disc.sqrt();
-                if den <= 0.0 {
-                    0.0
-                } else {
-                    2.0 * dstar / den
-                }
-            };
-            self.push_step(dir, to_clock(t0 + tau));
-            self.step_pos += if dir { 1 } else { -1 };
-        }
+    /// Direction of the last step (`stepcompress_get_step_dir`).
+    pub fn last_dir(&self) -> bool {
+        self.pending_dir
+    }
+
+    /// One step at `clock` (`stepcompress_append`).
+    pub fn step(&mut self, dir: bool, clock: u64) {
+        self.push_step(dir, clock);
+        self.step_pos += if dir { 1 } else { -1 };
+    }
+
+    /// Step clocks generated and not yet compressed (tests).
+    pub fn take_pending(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.pending)
     }
 
     fn push_step(&mut self, dir: bool, mut clock: u64) {
@@ -342,11 +311,13 @@ mod tests {
     }
 
     #[test]
-    fn stepper_generates_exact_count_and_direction() {
+    fn stepper_messages_and_direction() {
         let mut q = StepQueue::new(3, 0.01, true, 5000);
         let clk = |t: f64| (t * 200e6) as u64;
-        // 1 mm at constant 10 mm/s, starting at print time 1.0
-        q.gen_phase(1.0, 0.1, 0.0, 1.0, 10.0, 0.0, 0.0, 10.0, &clk);
+        // 100 steps at 1 ms
+        for k in 0..100 {
+            q.step(true, clk(1.0 + (k as f64 + 0.5) * 0.001));
+        }
         q.flush();
         assert_eq!(q.step_pos, 100);
         assert_eq!(q.steps_generated, 100);
@@ -355,10 +326,11 @@ mod tests {
         assert!(names[1].starts_with("reset_step_clock"));
         assert!(names[2].starts_with("queue_step oid=3 interval=") && names[2].contains("count=100"), "{names:?}");
         assert_eq!(names.len(), 3);
-        // and back again, in two windows
+        // and back again
         q.out.clear();
-        q.gen_phase(2.0, 0.1, 1.0, -1.0, 10.0, 0.0, 0.0, 2.05, &clk);
-        q.gen_phase(2.0, 0.1, 1.0, -1.0, 10.0, 0.0, 2.05, 10.0, &clk);
+        for k in 0..100 {
+            q.step(false, clk(2.0 + (k as f64 + 0.5) * 0.001));
+        }
         q.flush();
         assert_eq!(q.step_pos, 0);
         let first = DICT.decode(q.out[0].msg.as_slice()).next().unwrap().unwrap().to_string();

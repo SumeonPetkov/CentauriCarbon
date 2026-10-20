@@ -84,6 +84,8 @@ pub const QUERIES: &[(&str, &str)] = &[
     ("push_x, push_y, push_z", "deepest push past a frame limit / into the bed (mm)"),
     ("lost_steps", "steps sent to disabled drivers"),
     ("tmc_<x|y|z|e>_<reg>", "TMC2209 register (gconf, gstat, ifcnt, slaveconf, ihold_irun, tpowerdown, tpwmthrs, tcoolthrs, sgthrs, chopconf, pwmconf), microsteps, writes"),
+    ("pressure_advance, smooth_time, kin_flush_delay", "ccos's extruder settings (s for the times)"),
+    ("shaper_type_<x|y>, shaper_freq_<x|y>, damping_<x|y>", "ccos's input shaper (type as its name)"),
     ("light, part_fan, hotend_fan, nozzle_pwm, bed_pwm", "outputs (0..1)"),
     ("mcu_shutdown", "MCU shutdown reasons (\"toolhead: ADC out of range; …\"), or \"none\""),
     ("shutdown", "ccos shutdown reason, or \"none\""),
@@ -138,6 +140,28 @@ impl Emu {
         self.rt.engine.screen().name
     }
 
+    /// ccos's motion settings (`SET_PRESSURE_ADVANCE`, `SET_INPUT_SHAPER`).
+    fn motion_probe(&self, name: &str) -> Option<Val> {
+        let c = self.rt.printer.lock();
+        let sh = &c.shaper;
+        let ty = |t: i32| {
+            let n = ccos::motion::shaper::SHAPERS.iter().find(|(_, v)| *v == t).map_or("?", |(n, _)| *n);
+            Some(Val::Str(n.into()))
+        };
+        match name {
+            "pressure_advance" => Some(Val::Num(c.pressure_advance.0)),
+            "smooth_time" => Some(Val::Num(c.pressure_advance.1)),
+            "kin_flush_delay" => Some(Val::Num(c.kin_flush_delay)),
+            "shaper_type_x" => ty(sh.type_x),
+            "shaper_type_y" => ty(sh.type_y),
+            "shaper_freq_x" => Some(Val::Num(sh.freq_x)),
+            "shaper_freq_y" => Some(Val::Num(sh.freq_y)),
+            "damping_x" => Some(Val::Num(sh.damping_x)),
+            "damping_y" => Some(Val::Num(sh.damping_y)),
+            _ => None,
+        }
+    }
+
     pub fn query(&self, name: &str) -> Option<Val> {
         use cc_sim::world::Role2;
         let num = |v: f64| Some(Val::Num(v));
@@ -158,6 +182,7 @@ impl Emu {
                 "retracted" => num(w.stats.retracted_mm),
                 "cold_extrusion" => num(w.stats.cold_extrusion_mm),
                 "layers" => num(w.stats.layers.len() as f64),
+                "layer_heights" => Some(Val::Str(w.stats.layers.iter().map(|z| format!("{z:.2}")).collect::<Vec<_>>().join(" "))),
                 "bbox_x0" => num(bb[0]),
                 "bbox_y0" => num(bb[1]),
                 "bbox_x1" => num(bb[2]),
@@ -205,6 +230,9 @@ impl Emu {
         if name == "retransmits" {
             let c = self.rt.printer.lock();
             return num(c.mcus.iter().flatten().map(|m| m.retransmits).sum::<u64>() as f64);
+        }
+        if let Some(r) = self.motion_probe(name) {
+            return Some(r);
         }
         if name == "screen" {
             return Some(Val::Str(self.screen_name().into()));

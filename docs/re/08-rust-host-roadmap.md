@@ -77,11 +77,13 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
    `max_duration`, ADC range limits, `verify_heater`. Each layer is triggered
    on purpose in `sim/scripts/04_faults.ccsim`. The bed is mains-powered
    through an SSR: validate on hardware with care.
-5. ✅ **Steppers** (`motion/stepper.rs`): closed-form step times, compression
-   within 25 µs, direction changes, `reset_step_clock`, move-queue slot
+5. ✅ **Steppers** (`motion/stepper.rs`): compression within 25 µs,
+   direction changes, `reset_step_clock`, move-queue slot
    accounting. Still to do on the device: run the I/O thread `SCHED_FIFO`.
-6. ✅ **Kinematics & planning** (`motion/planner.rs`): Klipper's look-ahead,
-   CoreXY. Pressure advance and input shaping are still missing.
+6. ✅ **Kinematics & planning** (`motion/`): Klipper's look-ahead and CoreXY.
+   Step times come from the stock trapq/itersolve with input shaping and
+   pressure advance, generated `kin_flush_delay` behind the planner as the
+   stock toolhead does.
 7. ✅ **TMC2209 over UART** (`tmc.rs`, `gcode/tmc.rs`): a port of the
    stock driver code. It covers the connect-time register set, the
    StallGuard switching around homing, `SET_TMC_CURRENT_*`, `INIT_TMC`,
