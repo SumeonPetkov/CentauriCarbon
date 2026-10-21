@@ -1,0 +1,114 @@
+# Saved bed meshes (`[besh_profile_<material>_<name>]` in printer.cfg), one
+# at a time: the probed heights as a heatmap seen from above (front of the
+# bed at the bottom; blue = low, red = high) and their numbers. Profiles
+# come from BED_MESH_CALIBRATE / G29; the list is filled in by the G-code
+# thread (src/gcode/mesh.rs), the arrows are handled in src/runtime.rs.
+
+include = ["sidebar"]
+
+[[widget]]
+type = "label"
+at = [76, 6, 140, 24]
+text = "Bed mesh"
+font = "bold"
+
+[[widget]]
+type = "label"
+at = [220, 8, 88, 22]
+value = "mesh_page"
+font = "small"
+color = "dim"
+align = "right"
+show_if = "has_mesh"
+
+[[widget]]
+type = "heatmap"
+id = "map"
+at = [72, 34, 236, 236]
+value = "mesh_map"
+show_if = "has_mesh"
+
+[[widget]]
+type = "label"
+at = [84, 60, 212, 150]
+value = "mesh_hint"
+font = "small"
+color = "dim"
+show_if = "!has_mesh"
+
+[[widget]]
+type = "panel"
+at = [314, 34, 160, 174]
+
+[[widget]]
+type = "label"
+id = "name"
+at = [322, 40, 146, 24]
+value = "mesh_title"
+font = "bold"
+
+[[widget]]
+type = "label"
+at = [322, 62, 146, 36]
+value = "mesh_detail"
+font = "small"
+color = "dim"
+
+[[widget]]
+type = "label"
+at = [322, 98, 146, 20]
+value = "mesh_state"
+font = "small"
+color = "accent"
+show_if = "mesh_in_use"
+
+[[widget]]
+type = "label"
+at = [322, 98, 146, 20]
+value = "mesh_state"
+font = "small"
+color = "dim"
+show_if = "!mesh_in_use"
+
+[[widget]]
+type = "label"
+at = [322, 122, 146, 20]
+value = "mesh_high"
+font = "small"
+color = "#E63C32"
+
+[[widget]]
+type = "label"
+at = [322, 142, 146, 20]
+value = "mesh_low"
+font = "small"
+color = "#2860E6"
+
+[[widget]]
+type = "label"
+at = [322, 162, 146, 20]
+value = "mesh_range"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [322, 182, 146, 20]
+value = "mesh_mean"
+font = "small"
+color = "dim"
+
+[[widget]]
+type = "button"
+at = [314, 214, 76, 54]
+text = "←"
+font = "big"
+tap = "mesh_prev"
+show_if = "mesh_many"
+
+[[widget]]
+type = "button"
+at = [398, 214, 76, 54]
+text = "→"
+font = "big"
+tap = "mesh_next"
+show_if = "mesh_many"

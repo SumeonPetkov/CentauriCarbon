@@ -20,6 +20,7 @@ pub mod parse;
 mod cmds;
 mod home;
 mod loadcell;
+mod mesh;
 mod para;
 mod print;
 mod tmc;
@@ -131,7 +132,8 @@ pub struct Exec {
     from_file: bool,
     print: print::PrintState,
     cf: print::ChangeFilament,
-    mesh_enabled: bool,
+    /// `[bed_mesh]` (absent without that section).
+    bm: Option<Box<mesh::BedMesh>>,
     /// Not-yet-available commands already reported once.
     reported: std::collections::HashSet<&'static str>,
     /// `[tmc2209 …]` drivers, in config order (owned by the G-code thread).
@@ -301,15 +303,9 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("ACCELEROMETER_QUERY_X", "accelerometer"),
     ("ADXL345_DEBUG_READ_X", "accelerometer"),
     ("ADXL345_DEBUG_WRITE_X", "accelerometer"),
-    ("BED_MESH_CALIBRATE", "load-cell probing"),
-    ("BED_MESH_MAP", "bed mesh"),
-    ("BED_MESH_OFFSET", "bed mesh"),
-    ("BED_MESH_OUTPUT", "bed mesh"),
-    ("BED_MESH_SET_INDEX", "bed mesh"),
     ("BREAK_SAVE_STATUS", "power-loss resume"),
     ("CALIBRATE_Z_OFFSET", "load-cell probing"),
     ("CHECK_BED_MESH", "load-cell probing"),
-    ("G29", "load-cell probing"),
     ("HOME_ACCURACY", "load-cell probing"),
     ("LIFT_HOT_BED", "load-cell probing"),
     ("MEASURE_AXES_NOISE", "accelerometer"),
@@ -330,6 +326,7 @@ pub const NOT_YET: &[(&str, &str)] = &[
 impl Exec {
     pub fn new(p: Shared, ctl: Arc<Control>, jobs: Option<Receiver<Job>>) -> Self {
         let tmc = Self::tmc_load(&p);
+        let bm = mesh::BedMesh::from_config(&p.lock().cfgs.printer);
         let limits = {
             let c = p.lock();
             Limits { max_velocity_limit: c.m.limits.max_velocity, max_accel_limit: c.m.limits.max_accel, requested_accel_to_decel: c.m.limits.max_accel_to_decel }
@@ -353,7 +350,7 @@ impl Exec {
             from_file: false,
             print: print::PrintState::default(),
             cf: print::ChangeFilament::default(),
-            mesh_enabled: true,
+            bm,
             reported: Default::default(),
             tmc,
             sg: Default::default(),
@@ -410,6 +407,9 @@ impl Exec {
         }
         if self.loadcell_handles(&key) {
             return self.cmd_loadcell(&key, g);
+        }
+        if self.mesh_handles(&key) {
+            return self.cmd_mesh(&key, g);
         }
         match key.as_str() {
             // gcode.cpp built-ins
@@ -579,12 +579,6 @@ impl Exec {
             "MOVE_TO_EXTRUDE" => self.cmd_move_to_extrude(g),
             "M729" => self.cmd_m729(),
             "WIPE_NOZZLE" => self.cmd_wipe_nozzle(),
-            "G29.1" => self.cmd_g29_1(g),
-            "BED_MESH_APPLICATIONS" => {
-                self.mesh_enabled = g.i("ENABLE", 1)? != 0;
-                Ok(())
-            }
-            "BED_MESH_CLEAR" => Ok(()),
             // printer_para
             "ROOT" => {
                 self.is_root = true;
@@ -666,8 +660,7 @@ impl Exec {
 
     /// `gcode_move.reset_last_position`.
     fn reset_last_position(&mut self) {
-        let c = self.p.lock().commanded;
-        self.last = c;
+        self.last = self.mesh_get_position();
     }
 }
 
@@ -888,8 +881,18 @@ impl Exec {
         p.lock().ui.lock().busy = self.print.active;
     }
 
-    /// `M8233 S<saved z offset> P1`, as `BED_MESH_SET_INDEX` does at boot.
+    /// What the stock UI runs at boot: `BED_MESH_SET_INDEX TYPE=<plate>
+    /// INDEX=0` (plate from sysconf `print_platform_type`: 0 standard,
+    /// 1 enhancement), which applies the saved Z offset (`M8233 … P1`) and
+    /// loads the plate's `default` mesh. Without `[bed_mesh]` only the
+    /// Z offset.
     fn apply_saved_z_offset(&mut self) {
+        if self.bm.is_some() {
+            self.mesh_init();
+            let plate = self.core().cfgs.sysconf.get_int("system", "print_platform_type", 0);
+            self.single(&format!("BED_MESH_SET_INDEX TYPE={} INDEX=0", if plate == 1 { "enhancement" } else { "standard" }));
+            return;
+        }
         let zo = {
             let c = self.core();
             let mat = c.cfgs.printer.get_string("bed_mesh", "platform_material", "standard");

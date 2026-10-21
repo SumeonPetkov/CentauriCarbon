@@ -173,6 +173,7 @@ impl Runtime {
                 self.send(Job::Gcode("CANCEL_PRINT".into()));
             }
             Cmd::RefreshFiles => self.send(Job::RefreshFiles),
+            Cmd::MeshPrev | Cmd::MeshNext => self.ui.lock().mesh_step(c == Cmd::MeshNext),
         }
         None
     }

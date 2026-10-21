@@ -232,6 +232,9 @@ impl Exec {
                 // the stepper_z key list, which leaves it empty
                 c.cfgs.save_user("bed_mesh", &["position_endstop", "position_endstop_extra"]);
                 drop(c);
+                if let Some(bm) = self.bm.as_mut() {
+                    bm.probe_z_offset = 0.0;
+                }
                 self.single(&format!("BED_MESH_SET_INDEX TYPE={material} INDEX=0"));
             }
             "M8824" => {

@@ -8,8 +8,11 @@ use crate::core::{FAN_BOX, FAN_MODEL};
 impl Exec {
     // ---- gcode_move ----
 
-    /// `move_with_transform`: bed mesh (none yet) → `ToolHead::move1`.
+    /// `move_with_transform`: bed mesh → `ToolHead::move1`.
     pub(super) fn move_to(&mut self, pos: [f64; 4], speed: f64) -> Result<bool, Abort> {
+        if self.bm.is_some() {
+            return self.mesh_move(pos, speed);
+        }
         self.wait_buffer()?;
         Ok(self.core().add_move(pos, speed, true)?)
     }

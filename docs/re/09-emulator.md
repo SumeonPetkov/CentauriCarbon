@@ -79,6 +79,12 @@ cover. The toolhead link is throttled to 100 kB/s and the load-cell board to
 * The load cells (`crates/cc-sim/src/hx711s.rs`).
   - The bed sits on them and gives 0.5 mm (`BED_GIVE`) before Z slips.
     `push_z` counts the press.
+  - The bed is flat unless a script sets `option bed_shape <tilt x>
+    <tilt y> <dome>`: the surface rises by `tilt x` mm from X0 to X256 and
+    by `tilt y` from Y0 to Y256, and the centre sits `dome` mm above the
+    edges. The Z limits and PG8 are measured at the bed centre. `gap` is
+    the gap under the nozzle, which is what the load cells feel and where
+    filament is laid.
   - The bridge reads 251000 counts unloaded, minus 60000 counts per mm
     pressed, with 40-count noise.
   - The board firmware (`hx711s.c` and its helpers) is ported for the
@@ -151,6 +157,7 @@ The emulator needed — and drove — the printing core:
 | `07_tmc` | TMC2209 register images after connect, SET_TMC_CURRENT, INIT_TMC/SET_TMC_FIELD answered by the extruder driver, StallGuard on/off around homing, a broken X DIAG: X fails, G28 goes on with Y |
 | `08_loadcell` | `STRAINGAUGE_Z_HOME` (tare flags 0x8B, Z0 with the bed pressed ~0.1 mm), `STRAINGAUGE_TEST` back where it started, `DIRZCTL` moves Z without changing ccos's position, `READ_HX711` returns |
 | `09_loadcell_home` | G28 with `option config strain_gauge enable_z_home 1`: Z homed on the load cells, Z10 is 5.65 mm above the bed |
+| `10_bed_mesh` | a tilted, domed bed (`option bed_shape`) on a 3×3 grid: bad `BED_MESH_CALIBRATE` words refused before moving; the stock calibration saved as `default` and in use; Z1 at the same gap at five places; `BED_MESH_CALIBRATE S60 pla` heats first and saves `pla`; the Bed mesh screen and its arrows; `BED_MESH_CLEAR` shows the slope again; `G29 S65` |
 | `06_gcode_parity` | stock parser/console behaviour (unknown commands, M21 silent, range error text, upper-casing), M106 P/S rules, SET_LED TRANSMIT, SET_PRESSURE_ADVANCE/M900 and `kin_flush_delay`, SET_INPUT_SHAPER (SHAPER_TYPE_X ignored as in the stock code), the ROOT gate in a file, PAUSE/RESUME/CANCEL_PRINT during a print |
 
 Example:
@@ -173,7 +180,9 @@ bedshot shots/cube_bed.png
 * The TMC2209 model has no current or load physics: StallGuard is ideal
   once enabled (no false or late stall detection), and the run current
   changes nothing.
-* The bed is flat and rigid apart from its linear give. The load cells see
+* The bed is rigid apart from its linear give, and its shape is a plane
+  plus a dome. Moving X/Y at a small gap does not check for a crash into a
+  raised part of the bed. The load cells see
   no vibration, heat drift or nozzle ooze, so every tap is clean. The
   board's shake filter and the "other trigger" rules are therefore never
   tested by real noise.

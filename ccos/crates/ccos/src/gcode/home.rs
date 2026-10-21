@@ -365,6 +365,11 @@ impl Exec {
             c.cfgs.save_user("stepper_z", &["position_endstop", "position_endstop_extra"]);
         }
         drop(c);
+        if apply {
+            if let Some(bm) = self.bm.as_mut() {
+                bm.probe_z_offset = -zo + fix;
+            }
+        }
         super::console(&format!("cmd_M8233 probe z_offset : {}", super::parse::cpp_double(zo)));
     }
 }

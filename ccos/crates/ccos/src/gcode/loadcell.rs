@@ -45,6 +45,8 @@ pub(super) struct SgVals {
     pub out_index: i32,
     pub out_val_mm: f64,
     pub end_z_mm: f64,
+    /// Bed-mesh taps since the last load-cell Z homing (a shake every 12).
+    pub g29_cnt: i32,
 }
 
 /// `ck_sys_sta`: neither the load-cell board nor the DSP is shut down or
@@ -186,7 +188,7 @@ impl Exec {
 
     /// `HX711S::CalibrationStart(times_read, false)`: tare the cells and wait
     /// for the result. Ok(false) when it could not start.
-    fn calibration_start(&self, times_read: i64) -> Result<bool, Abort> {
+    pub(super) fn calibration_start(&self, times_read: i64) -> Result<bool, Abort> {
         if !self.ck_sys_sta() {
             return Ok(false);
         }
@@ -279,7 +281,7 @@ impl Exec {
 
     /// `probe_by_step`: probe down at most `min_dis` mm at `speed` from
     /// `rdy` (where the host thinks Z is); `up_after` goes back up after.
-    fn probe_by_step(&mut self, rdy: [f64; 4], speed: f64, min_dis: f64, up_after: bool) -> Result<Probe, Abort> {
+    pub(super) fn probe_by_step(&mut self, rdy: [f64; 4], speed: f64, min_dis: f64, up_after: bool) -> Result<Probe, Abort> {
         let step_mm = self.dirz_step_mm();
         let step_cnt = (min_dis / step_mm) as i32;
         let step_us = (((min_dis / speed) * 1000.0 * 1000.0) / step_cnt as f64) as i32;
@@ -362,7 +364,7 @@ impl Exec {
     }
 
     /// `shake_motor`: `cnt` small Z wiggles at the toolhead's max velocity.
-    fn shake_motor(&mut self, cnt: i32, cfg: &StrainGaugeCfg) -> CmdResult {
+    pub(super) fn shake_motor(&mut self, cnt: i32, cfg: &StrainGaugeCfg) -> CmdResult {
         let (pos, v) = {
             let c = self.core();
             (c.commanded, c.planner.lim.max_velocity)
@@ -439,6 +441,7 @@ impl Exec {
         }
         let (shake, force_retract, cool) = (true, true, true);
         super::console(&format!("--------------run_G28_z use probe_by_step--------------- need_force_retract:{}", force_retract as i32));
+        self.sg.g29_cnt = 0;
         let position_endstop = self.core().m.axes[2].position_endstop;
         let target = self.probe_prepare(&cfg, shake, cool)?;
         let now_pos = self.core().commanded;

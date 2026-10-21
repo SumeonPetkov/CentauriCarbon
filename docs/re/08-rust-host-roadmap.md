@@ -100,10 +100,21 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
        `READ_HX711`, and G28 with `enable_z_home`.
      - Tested against the emulator's port of the board firmware; not
        yet on a printer.
-   - Still to do: G29/`BED_MESH_CALIBRATE`, `CHECK_BED_MESH`,
-     `PRTOUCH_READY`, `MEASURE_GAP_TEST`, `NOZZLE_CLEAR`, the `PROBE*`
-     commands, and the mesh itself (bicubic/Lagrange interpolation, Z
-     compensation).
+   - 🟡 Done: the bed mesh (`mesh.rs`, `gcode/mesh.rs`).
+     - `BED_MESH_CALIBRATE` and G29 probe with the load cells as the stock
+       firmware does (`run_G29_Z`, samples/tolerance/retries,
+       `METHOD=fast`).
+     - The mesh is interpolated (bicubic/Lagrange) and every G-code move
+       follows it (the stock move splitter).
+     - Profiles are saved as `besh_profile_*` sections. `BED_MESH_SET_INDEX`
+       runs at boot.
+     - ccos additions: `BED_MESH_CALIBRATE [S<°C>] [name]`, `G29 S<°C>`,
+       and a Bed mesh screen that shows the saved profiles.
+     - Tested against the emulator with a tilted, domed bed; not yet on a
+       printer.
+   - Still to do: `CHECK_BED_MESH`, `PRTOUCH_READY`, `MEASURE_GAP_TEST`,
+     `NOZZLE_CLEAR`, `LIFT_HOT_BED`, `HOME_ACCURACY`,
+     `CALIBRATE_Z_OFFSET` and the `PROBE*` commands.
 9. ✅ **G-code interpreter** (`gcode/`, `config.rs`): a port of the stock
    one. It has the same parser, the full command set the Centauri Carbon
    loads, and the same defaults, range checks and internal scripts (G28,

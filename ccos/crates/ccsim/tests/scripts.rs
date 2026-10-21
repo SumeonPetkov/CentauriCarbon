@@ -63,6 +63,11 @@ fn load_cell_z_homing() {
     run("09_loadcell_home.ccsim");
 }
 
+#[test]
+fn bed_mesh() {
+    run("10_bed_mesh.ccsim");
+}
+
 /// Every script file has a test above.
 #[test]
 fn all_scripts_listed() {

@@ -22,5 +22,5 @@ pub mod touch;
 
 pub use canvas::{Canvas, Rect};
 pub use icon::{Icon, IconData};
-pub use screen::{Action, Cond, Dirty, Engine, Kind, Model, Screen, Touch, Widget};
+pub use screen::{heat_color, Action, Cond, Dirty, Engine, Kind, Matrix, Model, Screen, Touch, Widget, MATRIX_MAX};
 pub use text::{Align, Font, Glyph, TextBuf};

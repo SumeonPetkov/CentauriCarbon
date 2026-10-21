@@ -347,7 +347,8 @@ pub fn generate(ui: &Path, out: &Path) -> Result<Generated, String> {
                 "temp" => "Temp",
                 "bar" => "Bar",
                 "toggle" => "Toggle",
-                k => return Err(format!("{at}: unknown type '{k}' (panel, label, button, icon, temp, bar, toggle)")),
+                "heatmap" => "Heatmap",
+                k => return Err(format!("{at}: unknown type '{k}' (panel, label, button, icon, temp, bar, toggle, heatmap)")),
             };
             let [x, y, ww, hh] = w.at;
             if ww <= 0 || hh <= 0 || x < 0 || y < 0 || x + ww > SCREEN_W || y + hh > SCREEN_H {
@@ -359,7 +360,7 @@ pub fn generate(ui: &Path, out: &Path) -> Result<Generated, String> {
                     return Err(format!("{at}: duplicate id '{id}' on screen '{sname}'"));
                 }
             }
-            if matches!(kind, "Temp" | "Bar") && w.value.is_none() {
+            if matches!(kind, "Temp" | "Bar" | "Heatmap") && w.value.is_none() {
                 return Err(format!("{at}: type '{}' needs value = \"...\"", w.kind));
             }
             let text = w.text.clone().unwrap_or_default();
@@ -396,7 +397,7 @@ pub fn generate(ui: &Path, out: &Path) -> Result<Generated, String> {
             let bg_w = match w.bg.as_deref() {
                 Some("none") => "None".to_string(),
                 Some(c) => format!("Some(0x{:06x})", ctx.color(c, &at)?),
-                None if matches!(kind, "Panel" | "Button" | "Toggle" | "Temp") => format!("Some(0x{c_panel:06x})"),
+                None if matches!(kind, "Panel" | "Button" | "Toggle" | "Temp" | "Heatmap") => format!("Some(0x{c_panel:06x})"),
                 None => "None".into(),
             };
             let pressed = match &w.pressed {

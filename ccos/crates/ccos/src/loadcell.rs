@@ -103,6 +103,9 @@ pub struct StrainGaugeCfg {
     pub g28_max_hold: i64,
     pub shake_range: f64,
     pub self_z_offset: f64,
+    pub g29_speed: f64,
+    /// Probes go down at most Z − this (it is negative).
+    pub g29_max_detection: f64,
 }
 
 impl StrainGaugeCfg {
@@ -126,6 +129,8 @@ impl StrainGaugeCfg {
             g28_max_hold: c.get_int(S, "g28_max_hold", 50000),
             shake_range: c.get_double(S, "shake_range", 0.5),
             self_z_offset: c.get_double(S, "self_z_offset", 0.0),
+            g29_speed: c.get_double(S, "g29_speed", 2.0),
+            g29_max_detection: c.get_double(S, "g29_max_detection", -5.0),
         })
     }
 }

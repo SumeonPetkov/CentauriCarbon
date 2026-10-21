@@ -41,6 +41,13 @@ tap = "gcode G91\nG1 Y-10 F6000\nG90"
 
 [[widget]]
 type = "button"
+at = [214, 160, 80, 56]
+text = "Bed\nmesh"
+font = "small"
+tap = "goto mesh"
+
+[[widget]]
+type = "button"
 at = [300, 36, 80, 56]
 icon = "z_up"
 text = "Z up"

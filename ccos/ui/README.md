@@ -41,12 +41,16 @@ tap = "gcode G28"
 
 Widgets are drawn in order, later ones on top.
 
+A `heatmap` draws the grid as square cells with row 0 at the bottom, coloured
+from blue (lowest) through green to red (highest). It prints the numbers when
+cells are at least 44 px wide (up to 32 × 32 cells).
+
 | Field | Meaning |
 |---|---|
-| `type` | `panel`, `label`, `button`, `toggle`, `icon`, `temp`, `bar` |
+| `type` | `panel`, `label`, `button`, `toggle`, `icon`, `temp`, `bar`, `heatmap` |
 | `at` | `[x, y, width, height]` |
 | `text` | Fixed text. Use `\n` for a line break; long label text wraps. For `temp` it is the title. |
-| `value` | Live text (or level, for `bar`) supplied by the app — any `lower_snake_case` name |
+| `value` | Live text (or level, for `bar`; a grid of numbers, for `heatmap`) supplied by the app — any `lower_snake_case` name |
 | `target` | Second live value (`temp`: the target temperature line) |
 | `icon`, `icon_on` | Icon names from `theme.toml`; `icon_on` is shown while `on_if` holds |
 | `tap` | `goto <screen>`, `back`, `gcode <line>` (`\n` for several lines), or a command name |
@@ -62,7 +66,8 @@ variant in the generated `Value`, `Flag` or `Cmd` enum. The build then fails
 until you handle it in Rust — which is the point: nothing on screen can be
 silently unconnected.
 
-* `Value::YourName` → add a case to `Model::text` (and `Model::level` for bars)
+* `Value::YourName` → add a case to `Model::text` (and `Model::level` for bars,
+  `Model::matrix` for heatmaps)
   in `crates/ccos/src/app.rs` (fill it from the core in `Core::publish`,
   `crates/ccos/src/core.rs`, or from the G-code thread).
 * `Flag::YourName` → add a case to `Model::flag` in the same file.

@@ -588,25 +588,11 @@ impl Exec {
         let feed = self.core().cfgs.printer.get_string("auto_leveling", "extrude_feed_gcode", "");
         let mut s: Vec<String> = vec!["G28".into()];
         s.extend(feed.split(',').map(|l| l.trim().to_string()).filter(|l| !l.is_empty()));
-        let saved = self.mesh_enabled;
-        self.mesh_enabled = false;
+        let saved = self.take_mesh();
         let lines: Vec<&str> = s.iter().map(String::as_str).collect();
         self.run_script(&lines);
-        self.mesh_enabled = saved;
-        Ok(())
-    }
-
-    /// `G29.1 P1` re-applies the configured Z endstop; `P0` zeroes it and
-    /// the G-code Z offsets.
-    pub(super) fn cmd_g29_1(&mut self, g: &GCmd) -> CmdResult {
-        if g.i("P", 1)? == 1 {
-            let mut c = self.core();
-            let e = c.cfgs.printer.get_double("stepper_z", "position_endstop", 4.5);
-            c.m.axes[2].position_endstop = e;
-        } else {
-            self.base[2] = 0.0;
-            self.homing_position[2] = 0.0;
-            self.core().m.axes[2].position_endstop = 0.0;
+        if saved.is_some() {
+            self.set_mesh(saved);
         }
         Ok(())
     }

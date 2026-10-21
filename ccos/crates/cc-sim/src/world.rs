@@ -79,6 +79,10 @@ pub struct WorldConfig {
     pub z_limits: (f64, f64),
     /// Gap at which the Z endstop (PG8) reads triggered.
     pub z_trigger: f64,
+    /// Bed surface height (mm) over a flat bed: [rise from X 0 to 256, rise
+    /// from Y 0 to 256, dome (centre above the edges)]. The Z limits, the
+    /// endstop and the gap are measured at the bed centre.
+    pub bed_shape: [f64; 3],
 }
 
 impl Default for WorldConfig {
@@ -94,6 +98,7 @@ impl Default for WorldConfig {
             // PG8 is a separate sensor (not the load cells) that closes with
             // the bed ~4.5 mm below the nozzle (printer.cfg position_endstop_extra)
             z_trigger: 4.5,
+            bed_shape: [0.0; 3],
         }
     }
 }
@@ -446,7 +451,8 @@ impl World {
         let b = self.motors[1].travel * XY_STEP;
         let z = self.motors[2].travel * Z_STEP;
         let cand = [(a + b) * 0.5 + self.offset[0], (a - b) * 0.5 + self.offset[1], z + self.offset[2]];
-        let z_lim = (self.cfg.z_limits.0 - BED_GIVE, self.cfg.z_limits.1);
+        let surface = self.bed_surface(self.pos[0], self.pos[1]);
+        let z_lim = (self.cfg.z_limits.0 + surface - BED_GIVE, self.cfg.z_limits.1);
         let lim = [self.cfg.x_limits, self.cfg.y_limits, z_lim];
         for i in 0..3 {
             if axis_mask & (1 << i) == 0 {
@@ -464,10 +470,23 @@ impl World {
             self.pos[i] = c;
         }
         // the bed pushed down on its load cells counts as a push into it
-        self.push_mm[2] = self.push_mm[2].max(self.cfg.z_limits.0 - self.pos[2]);
+        self.push_mm[2] = self.push_mm[2].max(self.cfg.z_limits.0 - self.gap());
     }
 
-    /// Nozzle-to-bed gap at `t` (from the recent Z steps).
+    /// Height of the bed surface under (x, y), 0 at the centre of a flat bed.
+    pub fn bed_surface(&self, x: f64, y: f64) -> f64 {
+        let [tx, ty, dome] = self.cfg.bed_shape;
+        let (u, v) = (((x - 128.0) / 128.0).clamp(-1.0, 1.0), ((y - 128.0) / 128.0).clamp(-1.0, 1.0));
+        tx * (x - 128.0) / 256.0 + ty * (y - 128.0) / 256.0 + dome * (1.0 - u * u) * (1.0 - v * v)
+    }
+
+    /// Nozzle-to-bed gap under the nozzle now.
+    pub fn gap(&self) -> f64 {
+        self.pos[2] - self.bed_surface(self.pos[0], self.pos[1])
+    }
+
+    /// Nozzle-to-bed gap at `t` (from the recent Z steps; XY stand still
+    /// while the load cells probe).
     fn gap_at(&self, t: f64) -> f64 {
         match self.z_hist.iter().rposition(|(ht, _)| *ht <= t) {
             Some(i) => self.z_hist[i].1,
@@ -520,6 +539,8 @@ impl World {
     /// the nozzle was. Pressure advance exists to cancel this lag.
     fn deposit(&mut self, t: f64) {
         let [x, y, z] = self.nozzle_at(t);
+        // heights are measured from the bed surface under the nozzle
+        let z = z - self.bed_surface(x, y);
         let dt = (t - self.flow_t).max(0.0);
         self.flow_t = self.flow_t.max(t);
         if self.melt <= 0.0 || dt == 0.0 {
@@ -630,13 +651,13 @@ impl Hardware for World {
             2 => {
                 let was = self.stalled[2];
                 self.carriage_moved(0b100);
-                if self.stalled[2] && !was && self.pos[2] <= self.cfg.z_limits.0 - BED_GIVE {
+                if self.stalled[2] && !was && self.gap() <= self.cfg.z_limits.0 - BED_GIVE {
                     self.note_event(t, format!("nozzle pressed the bed down to its stop at x={:.1} y={:.1}", self.pos[0], self.pos[1]));
                 }
                 while self.z_hist.len() > 2 && self.z_hist[1].0 < t - 0.2 {
                     self.z_hist.pop_front();
                 }
-                self.z_hist.push_back((t, self.pos[2]));
+                self.z_hist.push_back((t, self.gap()));
             }
             _ => return self.extrude(d as f64 * scale * w.step_dist, t),
         }

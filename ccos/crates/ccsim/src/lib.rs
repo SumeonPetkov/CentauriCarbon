@@ -44,6 +44,8 @@ pub struct Options {
     /// `user_printer.cfg` entries (section, key, value) written before ccos
     /// starts.
     pub config: Vec<(String, String, String)>,
+    /// `WorldConfig::bed_shape` (tilt X, tilt Y, dome; mm).
+    pub bed_shape: [f64; 3],
 }
 
 impl Default for Options {
@@ -57,6 +59,7 @@ impl Default for Options {
             verbose: false,
             out_dir: PathBuf::from("."),
             config: Vec::new(),
+            bed_shape: [0.0; 3],
         }
     }
 }
@@ -81,7 +84,8 @@ impl std::fmt::Display for Val {
 pub const QUERIES: &[(&str, &str)] = &[
     ("nozzle, bed, chamber", "true temperatures in the simulated machine (°C)"),
     ("host_nozzle, host_bed", "temperatures as ccos reads them"),
-    ("x, y, z, e", "true carriage position / nozzle-bed gap / filament fed (mm)"),
+    ("x, y, z, e", "true carriage position / nozzle-bed gap at the bed centre / filament fed (mm)"),
+    ("gap", "nozzle-to-bed gap under the nozzle (differs from z with `option bed_shape`)"),
     ("host_x, host_y, host_z", "position ccos shows"),
     ("extruded, retracted, cold_extrusion", "filament (mm) pushed through a hot nozzle / pulled back / pushed while cold"),
     ("layers, bbox_x0, bbox_y0, bbox_x1, bbox_y1, bbox_w, bbox_h, max_z", "what was printed"),
@@ -99,6 +103,7 @@ pub const QUERIES: &[(&str, &str)] = &[
     ("links", "number of MCUs ccos is connected to"),
     ("busy", "1 while ccos executes a command or prints"),
     ("layer", "current layer as ccos counts it (;LAYER: markers)"),
+    ("mesh_title, mesh_page, mesh_state, mesh_range", "the bed-mesh screen: profile name, \"n / m\", \"In use\"/\"Not in use\", \"Range … mm\""),
     ("console", "the last 256 lines of ccos's G-code console (use ~ / !~)"),
     ("retransmits, naks", "protocol recoveries so far"),
 ];
@@ -116,7 +121,7 @@ impl Emu {
         std::fs::create_dir_all(&opts.dir)?;
         let sim = Sim::start(SimConfig {
             dir: opts.dir.clone(),
-            world: WorldConfig { thermal_speed: opts.speed, ..WorldConfig::default() },
+            world: WorldConfig { thermal_speed: opts.speed, bed_shape: opts.bed_shape, ..WorldConfig::default() },
             mcus_running: !opts.bootloader,
             corrupt_rate: opts.corrupt,
             verbose: opts.verbose,
@@ -191,6 +196,7 @@ impl Emu {
                 "x" => num(w.pos[0]),
                 "y" => num(w.pos[1]),
                 "z" => num(w.pos[2]),
+                "gap" => num(w.gap()),
                 "e" => num(w.e_mm),
                 "extruded" => num(w.stats.extruded_mm),
                 "retracted" => num(w.stats.retracted_mm),
@@ -276,6 +282,10 @@ impl Emu {
             "busy" => num(s.busy as u8 as f64),
             "layer" => num(s.print.layer as f64),
             "console" => Some(Val::Str(ccos::gcode::console_lines().join("\n"))),
+            "mesh_title" => text(ccos::ui::Value::MeshTitle),
+            "mesh_page" => text(ccos::ui::Value::MeshPage),
+            "mesh_state" => text(ccos::ui::Value::MeshState),
+            "mesh_range" => text(ccos::ui::Value::MeshRange),
             _ => None,
         }
     }

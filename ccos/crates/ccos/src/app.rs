@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
-use cc_ui::{Model, TextBuf};
+use cc_ui::{Matrix, Model, TextBuf};
 
 use crate::ui::{Flag, Value};
 use crate::Target;
@@ -78,6 +78,12 @@ pub struct State {
     pub busy: bool,
     /// Mirror log lines to stderr.
     pub echo: bool,
+    /// Saved bed meshes (filled by the G-code thread).
+    pub meshes: Vec<crate::mesh::ProfileView>,
+    /// Section of the mesh in use, if any.
+    pub mesh_active: Option<String>,
+    /// The mesh shown on the bed-mesh screen.
+    pub mesh_sel: usize,
 }
 
 impl Default for State {
@@ -106,6 +112,9 @@ impl Default for State {
             motion_lock: None,
             busy: false,
             echo: true,
+            meshes: Vec::new(),
+            mesh_active: None,
+            mesh_sel: 0,
         }
     }
 }
@@ -127,6 +136,28 @@ impl State {
         let st = self.status.clone();
         self.log(st);
     }
+
+    /// The bed mesh shown on the bed-mesh screen.
+    pub fn shown_mesh(&self) -> Option<&crate::mesh::ProfileView> {
+        self.meshes.get(self.mesh_sel.min(self.meshes.len().saturating_sub(1)))
+    }
+
+    /// Step through the saved meshes (wrapping).
+    pub fn mesh_step(&mut self, forward: bool) {
+        let n = self.meshes.len();
+        if n > 0 {
+            let cur = self.mesh_sel.min(n - 1);
+            self.mesh_sel = if forward { (cur + 1) % n } else { (cur + n - 1) % n };
+        }
+    }
+}
+
+/// Lowest, highest and mean probed height.
+fn mesh_stats(m: &crate::mesh::ProfileView) -> (f64, f64, f64) {
+    let lo = m.points.iter().cloned().fold(f64::INFINITY, f64::min);
+    let hi = m.points.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let mean = m.points.iter().sum::<f64>() / m.points.len().max(1) as f64;
+    (lo, hi, mean)
 }
 
 /// Shared handle to the screen state.
@@ -268,6 +299,54 @@ impl Model<Value, Flag> for State {
                 let p = self.pos;
                 let _ = write!(out, "X{:.1} Y{:.1} Z{:.2}", p[0], p[1], p[2]);
             }
+            Value::MeshMap => {}
+            Value::MeshHint => out.push_str("No saved bed meshes yet.
+
+BED_MESH_CALIBRATE probes the bed; add S<°C> to heat the bed first and a name to save it under that name, e.g.
+BED_MESH_CALIBRATE S75 pla"),
+            Value::MeshPage => {
+                if !self.meshes.is_empty() {
+                    let _ = write!(out, "{} / {}", self.mesh_sel.min(self.meshes.len() - 1) + 1, self.meshes.len());
+                }
+            }
+            Value::MeshTitle => {
+                if let Some(m) = self.shown_mesh() {
+                    out.push_str(&m.name);
+                }
+            }
+            Value::MeshDetail => {
+                if let Some(m) = self.shown_mesh() {
+                    let _ = write!(out, "{} plate\n{}×{} · {}", m.material, m.x_count, m.y_count, m.algo);
+                }
+            }
+            Value::MeshState => {
+                if self.shown_mesh().is_some() {
+                    out.push_str(if self.flag(Flag::MeshInUse) { "In use" } else { "Not in use" });
+                }
+            }
+            Value::MeshHigh | Value::MeshLow | Value::MeshRange | Value::MeshMean => {
+                if let Some(m) = self.shown_mesh().filter(|m| !m.points.is_empty()) {
+                    let (lo, hi, mean) = mesh_stats(m);
+                    let _ = match v {
+                        Value::MeshHigh => write!(out, "High {hi:+.3} mm"),
+                        Value::MeshLow => write!(out, "Low {lo:+.3} mm"),
+                        Value::MeshRange => write!(out, "Range {:.3} mm", hi - lo),
+                        _ => write!(out, "Mean {mean:+.3} mm"),
+                    };
+                }
+            }
+        }
+    }
+
+    fn matrix(&self, v: Value, out: &mut Matrix) {
+        if v != Value::MeshMap {
+            return;
+        }
+        let Some(m) = self.shown_mesh() else { return };
+        if m.points.len() == m.x_count * m.y_count && out.resize(m.x_count, m.y_count) {
+            for (o, z) in out.z.iter_mut().zip(&m.points) {
+                *o = *z as f32;
+            }
         }
     }
 
@@ -294,6 +373,9 @@ impl Model<Value, Flag> for State {
             Flag::Paused => p == Phase::Paused,
             Flag::PrintActive => matches!(p, Phase::Printing | Phase::Paused),
             Flag::Shutdown => self.shutdown.is_some(),
+            Flag::HasMesh => !self.meshes.is_empty(),
+            Flag::MeshMany => self.meshes.len() > 1,
+            Flag::MeshInUse => self.shown_mesh().is_some_and(|m| self.mesh_active.as_deref() == Some(m.section.as_str())),
         }
     }
 }

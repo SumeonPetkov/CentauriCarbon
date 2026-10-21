@@ -16,7 +16,8 @@ listed under [Deliberate differences](#deliberate-differences).
 | `gcode/home.rs` | `homing.cpp`, `safe_z_home.cpp`, `kinematics/corexy.cpp` (homing), `mcu_io.cpp` (trsync/endstop), `chelper/trdispatch.c` (in `core.rs`) |
 | `motion/trapq.rs`, `itersolve.rs`, `shaper.rs`; `core.rs` (flush timing) | `chelper/trapq.c`, `itersolve.c`, `kin_corexy.c`, `kin_shaper.c`, `kin_extruder.c`; `toolhead.cpp`, `extras/input_shaper.cpp`, `kinematics/extruder.cpp` |
 | `tmc.rs` + `gcode/tmc.rs` | `tmc.cpp`, `tmc2208.cpp`, `tmc2209.cpp`, `tmc_uart.cpp`, `serialhdl.cpp` (`send_with_response`) |
-| `gcode/print.rs` | `virtual_sdcard.cpp`, `print_stats.cpp`, `pause_resume.cpp`, `change_filament.cpp`, `auto_leveling.cpp` (M729, WIPE_NOZZLE, G29.1) |
+| `gcode/print.rs` | `virtual_sdcard.cpp`, `print_stats.cpp`, `pause_resume.cpp`, `change_filament.cpp`, `auto_leveling.cpp` (M729, WIPE_NOZZLE) |
+| `mesh.rs` + `gcode/mesh.rs` | `extras/bed_mesh.cpp`, `probe.cpp` (`ProbePointsHelper`, `PrinterProbe::run_probe`), `auto_leveling.cpp` (G29, G29.1), `strain_gauge.cpp` (`run_G29_Z`) |
 | `gcode/para.rs` + `para_table.rs` | `printer_para.cpp` (ROOT, UNROOT, M8000–M8826) |
 | `config.rs` | `configfile.cpp` (ConfigParser, `WriteIni`, `WriteI_specified_Ini`) |
 
@@ -70,8 +71,9 @@ Exactly `gcode.cpp`:
 | Heaters | M104 M109 M140 M190 M105 SET_HEATER_TEMPERATURE TEMPERATURE_WAIT TURN_OFF_HEATERS M301 M130 M131 M132 PID_CALIBRATE PID_CALIBRATE_ALL PID_CALIBRATE_HOTBED PID_CALIBRATE_NOZZLE |
 | Fans, LEDs | M106 M107 SET_FAN_SPEED SET_LED_led1 SET_LED_led2 |
 | Print job | SDCARD_PRINT_FILE SDCARD_RESET_FILE SET_PRINT_STATS_INFO M117 PAUSE RESUME CLEAR_PAUSE CANCEL_PRINT STOP_PRINT M75 M76 M77 M601 M602 M603 |
-| Filament | M600 LOAD_FILAMENT MOVE_TO_EXTRUDE CUT_OFF_FILAMENT EXTRUDE_FILAMENT CHANGE_FILAMENT_SET_ACTIVE CHANGE_FILAMENT_SET_BUSY CHANGE_FILAMENT_SET_CHECK_MOVE_IGNORE M729 WIPE_NOZZLE G29.1 |
-| System | ROOT UNROOT M8000–M8826 (all 165), SET_IDLE_TIMEOUT UPDATE_IDLE_TIMER M112 RESTART FIRMWARE_RESTART ECHO STATUS HELP G M M110 M115 BED_MESH_APPLICATIONS BED_MESH_CLEAR |
+| Filament | M600 LOAD_FILAMENT MOVE_TO_EXTRUDE CUT_OFF_FILAMENT EXTRUDE_FILAMENT CHANGE_FILAMENT_SET_ACTIVE CHANGE_FILAMENT_SET_BUSY CHANGE_FILAMENT_SET_CHECK_MOVE_IGNORE M729 WIPE_NOZZLE |
+| Bed mesh | G29 G29.1 BED_MESH_CALIBRATE BED_MESH_SET_INDEX BED_MESH_OUTPUT BED_MESH_MAP BED_MESH_OFFSET BED_MESH_APPLICATIONS BED_MESH_CLEAR |
+| System | ROOT UNROOT M8000–M8826 (all 165), SET_IDLE_TIMEOUT UPDATE_IDLE_TIMER M112 RESTART FIRMWARE_RESTART ECHO STATUS HELP G M M110 M115 |
 
 **Phase 2**: these exist on the printer, but ccos does not yet have the
 subsystem behind them. They are accepted, do nothing, and log
@@ -79,8 +81,7 @@ subsystem behind them. They are accepted, do nothing, and log
 
 | Subsystem | Commands |
 |---|---|
-| Load-cell probing | G29 PROBE PROBE_ACCURACY PROBE_CALIBRATE QUERY_PROBE CALIBRATE_Z_OFFSET CHECK_BED_MESH HOME_ACCURACY LIFT_HOT_BED MEASURE_GAP_TEST NOZZLE_CLEAR PRTOUCH_READY BED_MESH_CALIBRATE |
-| Bed mesh | BED_MESH_MAP BED_MESH_OFFSET BED_MESH_OUTPUT BED_MESH_SET_INDEX |
+| Load-cell probing | PROBE PROBE_ACCURACY PROBE_CALIBRATE QUERY_PROBE CALIBRATE_Z_OFFSET CHECK_BED_MESH HOME_ACCURACY LIFT_HOT_BED MEASURE_GAP_TEST NOZZLE_CLEAR PRTOUCH_READY |
 | Accelerometer | SHAPER_CALIBRATE SHAPER_CALIBRATE_SCRIPT TEST_RESONANCES MEASURE_AXES_NOISE ACCELEROMETER_MEASURE_X ACCELEROMETER_QUERY_X ADXL345_DEBUG_READ_X ADXL345_DEBUG_WRITE_X |
 | Power-loss resume | BREAK_SAVE_STATUS SDCARD_PRINT_FILE_BREAK_SAVE STOP_RESUME |
 
@@ -219,6 +220,73 @@ BED_MESH_PROFILE.
   - Only `[strain_gauge]`, `[hx711s]` and `[dirzctl]` register these
     commands. Without them, ccos answers `unknown command`, as the
     printer does.
+- **Bed mesh** (`[bed_mesh]`, `[bed_mesh_probe]`).
+  - The grid is 11×11 from (20, 20) to (246, 246), probed in a zig-zag
+    from the front. It is interpolated bicubically with 3 points between
+    probes. `BED_MESH_SET_INDEX INDEX=1` switches to the secondary 6×6 grid
+    (Lagrange, 6 points between).
+  - At boot the stock UI runs `BED_MESH_SET_INDEX TYPE=standard|enhancement
+    INDEX=0`, from sysconf `print_platform_type`. That applies the plate's
+    Z offset (`SET_GCODE_OFFSET Z=0`, then `M8233 S<offset> P1`, which
+    saves), stores the plate in `platform_material`, rebuilds the grid and
+    loads the plate's `default` mesh. M8823 runs it too.
+  - Profiles are `[besh_profile_<plate>_<name>]` sections (the stock
+    spelling) in `printer.cfg` and `user_printer.cfg`: points, min/max,
+    algorithm and counts. Loading one logs "bed_mesh: malformed value"
+    twice, and takes `mesh_y_pps` from `mesh_x_pps` (stock bugs, kept).
+  - `BED_MESH_PROFILE` is never registered: the profile manager reads the
+    version from a section that does not exist. ccos leaves it out too, so
+    the screen only *shows* the saved meshes.
+  - `BED_MESH_CALIBRATE [PROFILE=|SAVE=] [PROBE_COUNT=x,y] [ALGORITHM=]
+    [RELATIVE_REFERENCE_INDEX=] [METHOD=fast] [SAMPLES=…]`:
+    1. It runs `BED_MESH_SET_INDEX INDEX=0` (so the `default` mesh is in use
+       while probing; the probe moves bypass it).
+    2. For each point: up to Z2 at 6 mm/s, over the point at 150 mm/s,
+       then taps. Each tap is `run_G29_Z`: shake Z every 12th tap since the
+       last load-cell Z homing, tare 30 samples, probe down up to 32 mm at
+       3 mm/s, come back up.
+    3. Two taps must agree within 0.01 mm. After the 2nd retry the
+       tolerance grows by 0.005 per retry. After 20 retries "Probe samples
+       exceed samples_tolerance" ends the run. Points within 20 mm of an
+       edge use the `edge_*` settings (the same values in the stock
+       config).
+    4. The mean of the taps, minus the bed-mesh probe's Z offset
+       (−z_offset + fix_z_offset after M8233), is the point's height.
+    5. The mesh is built, used at once, logged "Bed Mesh Leveling
+       Complete", and saved: to the PROFILE/SAVE name, else to the grid
+       index (1), else to `default`.
+  - **Any probe error** turns the heaters and part fan off and shuts the
+    printer down, as on the printer.
+  - `METHOD=fast` re-taps the four corners of the mesh in use. If all are
+    within 0.03 mm of it, the run ends and nothing is saved. Otherwise
+    `BED_MESH_SET_INDEX INDEX=1` and a full run on the 6×6 grid.
+  - **G29** (the screen's auto-levelling):
+    1. `M211 S0`, nozzle 140 °C, bed 60 °C, fans off.
+    2. `WIPE_NOZZLE` (G28 and the purge) with the mesh off.
+    3. `RESET_PRINTER_PARAM`, `M109 S140`.
+    4. Z offset to 0: `SET_GCODE_OFFSET Z=0`, `M8233 S0.000 P1`, which is
+       saved (stock behaviour).
+    5. `G28 Z`, `M109 S140`, `M190 S60`, `BED_MESH_CALIBRATE`.
+    6. `G1 X10 Y10 F4500`, heaters and fan off, `M211 S1`.
+
+    G29 is a "traditional" command, so `PROFILE=` and `PROBE_COUNT=` on a
+    G29 line are garbage letters and never reach it.
+  - `G29.1 P0` zeroes the Z endstop, the G-code Z offset and the bed-mesh
+    probe offset and turns the mesh off. `P1` restores them from the config
+    and reloads the current profile. G29 only uses them with
+    `enable_z_home`, which the stock config has off.
+  - **Moves.** Every G-code move goes through the mesh. It is split where
+    the mesh height changes (`move_check_distance` 5 mm, `split_delta_z`
+    0.025 mm) and Z is raised by the mesh. Before splitting, a move past a
+    limit is clamped on the first axis out of range only, and the G-code
+    position takes the clamped value (`check_endstops`). There is no fade
+    (`fade_end` is 0).
+  - `BED_MESH_OUTPUT` logs the probed and interpolated mesh. `PGP=1` logs
+    the grid points instead. `BED_MESH_MAP` does nothing.
+  - `BED_MESH_APPLICATIONS ENABLE=0` turns the mesh off and keeps it.
+    `ENABLE=1` puts the kept one back. Without an earlier `ENABLE=0`, that
+    is no mesh: `ENABLE=1` turns the mesh off (stock bug, kept).
+    `BED_MESH_CLEAR` turns it off.
 - **TMC2209 drivers.**
   - At connect, in name order (extruder, stepper_x, stepper_y,
     stepper_z): read DRV_STATUS; write SLAVECONF and GCONF; then write
@@ -284,6 +352,34 @@ BED_MESH_PROFILE.
   as `key : value` with 6 decimals; `user_printer.cfg` is overlaid on
   `printer.cfg` at load.
 
+## ccos additions
+
+These are not in the stock firmware. Lines that work there do the same
+here; the additions only give meaning to lines the stock firmware ignores.
+
+- `BED_MESH_CALIBRATE S<°C>` heats the bed and waits for it before
+  probing. The bed is left at that temperature. Plain `BED_MESH_CALIBRATE`
+  does not heat, as in the stock firmware. `S=75` works too.
+- `BED_MESH_CALIBRATE <name>` saves the mesh as `<name>` instead of
+  `default`, like `PROFILE=<name>`. Both can be combined, in either order:
+  `BED_MESH_CALIBRATE S75 pla`.
+  - A bare word `S<number>` (or `s<number>`) is the temperature; any other
+    bare word is the name.
+  - Names may use letters, digits, `_`, `-` and `.`.
+  - Two names, two temperatures, a name that differs from `PROFILE=`, or a
+    temperature outside the bed's `min_temp`..`max_temp` are refused
+    before anything moves.
+  - In the stock firmware a bare word is a parameter nobody reads.
+- `G29 S<°C>` uses that bed temperature instead of 60 °C.
+- The **Bed mesh** screen (Control → Bed mesh) shows the saved profiles
+  one at a time, `default` first: a heatmap seen from above (front at the
+  bottom; blue low, red high), the plate, the grid size, the algorithm,
+  whether it is the mesh in use, and the highest point, lowest point, range
+  and mean. The arrows step through the profiles. It is view-only, because
+  the stock firmware has no command to load a profile
+  (`BED_MESH_PROFILE` is never registered).
+- While probing, the status line reads `Bed mesh: point <n> of <total>`.
+
 ## Deliberate differences
 
 | Where | Stock firmware | ccos | Why |
@@ -299,7 +395,17 @@ BED_MESH_PROFILE.
 | `cal_min_z` | spins for the two Z reports without checking for a shutdown | a shutdown ends the wait | a hang |
 | `run_G28_Z` (probe path) | no `return` statement | returns whether Z homed; G28 ignores it as before | undefined behaviour |
 | `use_probe_by_step: 0` | G28 homes Z with `homing_z_move` on the endstop, sampling the load cells | refused ("not available in ccos") | not used by the stock config |
-| Bed mesh | Z compensation from the probed mesh | none, so the nozzle sits `fix_z_offset` (0.15 mm) higher than the stock firmware with a mesh | phase 2 |
+| `BED_MESH_OFFSET` | writes X/Y into an empty vector | sets the mesh's X/Y lookup offsets (as Klipper does); "No mesh loaded to offset" without a mesh | undefined behaviour |
+| `BED_MESH_APPLICATIONS ENABLE=1` after a calibration | uses the mesh that `set_mesh` has deleted | the kept mesh is still valid and is used | undefined behaviour |
+| `BED_MESH_CALIBRATE METHOD=manual` | registers ACCEPT/ABORT on a helper that is destroyed when the command returns | refused ("not available in ccos") | undefined behaviour |
+| `PROBE_COUNT` below 3 | only logs "bed_mesh must have a minimum", then reads outside the mesh | refused before probing | undefined behaviour |
+| Grid that isn't square (`PROBE_COUNT=5,3`) | the interpolated mesh is sized x × y but indexed [y][x]; a saved profile is read the same way | rows are Y, columns X | undefined behaviour |
+| Bicubic with fewer than 3 points on an axis | control points past the end of a row | the last point repeats | undefined behaviour |
+| `ALGORITHM=direct` with `mesh_pps` > 0 | the mesh is sized for the interpolated points but holds only the probed ones | no points between probes | undefined behaviour |
+| `RELATIVE_REFERENCE_INDEX` outside the grid | indexes past the probed points | ignored (the probe's Z offset is used) | undefined behaviour |
+| `G29` Z offset | `M8233 S%.3f` given an `int` | `M8233 S0.000 P1` | undefined behaviour |
+| `G29`/probing without `[strain_gauge]` | dereferences null | probing refused with an error | undefined behaviour |
+| Shutdown after a probe error | reason "" | the error text, so the screen says why | display only |
 
 ## Tests
 

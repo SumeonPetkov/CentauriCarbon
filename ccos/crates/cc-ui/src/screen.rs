@@ -18,6 +18,69 @@ pub trait Model<V: Copy, F: Copy> {
     }
     /// Condition for `show_if` / `on_if`.
     fn flag(&self, f: F) -> bool;
+    /// Cells for heatmaps (`type = "heatmap"`); leave `out` empty for none.
+    fn matrix(&self, _v: V, _out: &mut Matrix) {}
+}
+
+/// Most cells a heatmap shows (32 × 32).
+pub const MATRIX_MAX: usize = 32 * 32;
+
+/// A grid of values for `type = "heatmap"`, row 0 first (drawn at the
+/// bottom). Fixed size, so filling it every frame allocates nothing.
+#[derive(Clone)]
+pub struct Matrix {
+    pub cols: u8,
+    pub rows: u8,
+    pub z: [f32; MATRIX_MAX],
+}
+
+impl Default for Matrix {
+    fn default() -> Self {
+        Self { cols: 0, rows: 0, z: [0.0; MATRIX_MAX] }
+    }
+}
+
+impl Matrix {
+    pub fn clear(&mut self) {
+        self.cols = 0;
+        self.rows = 0;
+    }
+
+    /// Set the size; false (and empty) if it does not fit.
+    pub fn resize(&mut self, cols: usize, rows: usize) -> bool {
+        if cols == 0 || rows == 0 || cols > 255 || rows > 255 || cols * rows > MATRIX_MAX {
+            self.clear();
+            return false;
+        }
+        self.cols = cols as u8;
+        self.rows = rows as u8;
+        true
+    }
+
+    pub fn cells(&self) -> &[f32] {
+        &self.z[..self.cols as usize * self.rows as usize]
+    }
+
+    pub fn get(&self, col: usize, row: usize) -> f32 {
+        self.z[row * self.cols as usize + col]
+    }
+
+    pub fn range(&self) -> (f32, f32) {
+        self.cells().iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)))
+    }
+}
+
+/// Heatmap colour for `t` in 0..=1: blue (low) → green → red (high).
+pub fn heat_color(t: f32) -> u32 {
+    const STOPS: [(f32, [f32; 3]); 5] =
+        [(0.0, [40.0, 90.0, 230.0]), (0.25, [40.0, 190.0, 230.0]), (0.5, [60.0, 200.0, 90.0]), (0.75, [240.0, 200.0, 40.0]), (1.0, [230.0, 60.0, 50.0])];
+    let t = if t.is_nan() { 0.5 } else { t.clamp(0.0, 1.0) };
+    let i = STOPS.iter().rposition(|(s, _)| *s <= t).unwrap_or(0).min(STOPS.len() - 2);
+    let (s0, c0) = STOPS[i];
+    let (s1, c1) = STOPS[i + 1];
+    let f = (t - s0) / (s1 - s0);
+    let ch = |k: usize| (c0[k] + (c1[k] - c0[k]) * f).round() as u32;
+    (ch(0) << 16) | (ch(1) << 8) | ch(2)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +104,8 @@ pub enum Kind {
     Temp,
     Bar,
     Toggle,
+    /// A grid of coloured cells from [`Model::matrix`].
+    Heatmap,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -147,6 +212,7 @@ pub struct Engine<C: 'static, V: 'static, F: 'static> {
     full: bool,
     dirty: Dirty,
     tmp: TextBuf,
+    mat: Box<Matrix>,
 }
 
 fn fnv(h: &mut u64, bytes: &[u8]) {
@@ -169,6 +235,7 @@ impl<C: Copy, V: Copy, F: Copy> Engine<C, V, F> {
             full: true,
             dirty: Dirty { rects: [Rect::default(); MAX_DIRTY], n: 0 },
             tmp: TextBuf::default(),
+            mat: Box::default(),
         }
     }
 
@@ -264,6 +331,14 @@ impl<C: Copy, V: Copy, F: Copy> Engine<C, V, F> {
                     fnv(&mut h, &((m.level(v).clamp(0.0, 1.0) * 1000.0) as u32).to_le_bytes());
                 }
             }
+            if let (Kind::Heatmap, Some(v)) = (w.kind, w.value) {
+                self.mat.clear();
+                m.matrix(v, &mut self.mat);
+                fnv(&mut h, &[self.mat.cols, self.mat.rows]);
+                for z in self.mat.cells() {
+                    fnv(&mut h, &z.to_le_bytes());
+                }
+            }
             if self.sig[i] != h {
                 self.sig[i] = h;
                 if !self.full {
@@ -286,7 +361,11 @@ impl<C: Copy, V: Copy, F: Copy> Engine<C, V, F> {
             canvas.fill_rect(r, screen.bg);
             for (i, w) in screen.widgets.iter().enumerate() {
                 if w.rect.intersects(&r) && self.visible(w, m) {
-                    draw_widget(canvas, w, m, self.pressed == Some(i), &mut self.tmp);
+                    if let (Kind::Heatmap, Some(v)) = (w.kind, w.value) {
+                        self.mat.clear();
+                        m.matrix(v, &mut self.mat);
+                    }
+                    draw_widget(canvas, w, m, self.pressed == Some(i), &mut self.tmp, &self.mat);
                 }
             }
         }
@@ -295,7 +374,7 @@ impl<C: Copy, V: Copy, F: Copy> Engine<C, V, F> {
     }
 }
 
-fn draw_widget<C, V: Copy, F: Copy>(c: &mut Canvas, w: &Widget<C, V, F>, m: &impl Model<V, F>, pressed: bool, tmp: &mut TextBuf) {
+fn draw_widget<C, V: Copy, F: Copy>(c: &mut Canvas, w: &Widget<C, V, F>, m: &impl Model<V, F>, pressed: bool, tmp: &mut TextBuf, mat: &Matrix) {
     let on = w.on || w.on_if.is_some_and(|k| m.flag(k.flag) != k.negate);
     let r = w.rect;
     let bg = if pressed { Some(w.bg_pressed) } else { w.bg };
@@ -381,6 +460,44 @@ fn draw_widget<C, V: Copy, F: Copy>(c: &mut Canvas, w: &Widget<C, V, F>, m: &imp
             let fw = (r.w as f32 * level).round() as i16;
             if fw > 0 {
                 c.fill_round_rect(Rect::new(r.x, r.y, fw.max(r.h), r.h), rad, w.accent, 255);
+            }
+        }
+        Kind::Heatmap => draw_heatmap(c, w, mat, tmp),
+    }
+}
+
+/// Square cells, as large as fit, centred; row 0 at the bottom. Colours
+/// span the matrix's own range. Cells wide enough also show their value.
+fn draw_heatmap<C, V, F>(c: &mut Canvas, w: &Widget<C, V, F>, mat: &Matrix, tmp: &mut TextBuf) {
+    let (cols, rows) = (mat.cols as i32, mat.rows as i32);
+    if cols == 0 || rows == 0 {
+        return;
+    }
+    let r = w.rect.inset(4);
+    let cell = (r.w as i32 / cols).min(r.h as i32 / rows);
+    if cell < 2 {
+        return;
+    }
+    let x0 = r.x as i32 + (r.w as i32 - cell * cols) / 2;
+    let y0 = r.y as i32 + (r.h as i32 - cell * rows) / 2;
+    let (lo, hi) = mat.range();
+    let span = hi - lo;
+    let gap = if cell >= 8 { 1 } else { 0 };
+    let small = w.font_small;
+    let label = cell >= 44 && cell >= small.line_height as i32 + 4;
+    for row in 0..rows {
+        for col in 0..cols {
+            let v = mat.get(col as usize, row as usize);
+            let t = if span > 1e-6 { (v - lo) / span } else { 0.5 };
+            let x = x0 + col * cell;
+            let y = y0 + (rows - 1 - row) * cell;
+            let cr = Rect::new(x as i16, y as i16, (cell - gap) as i16, (cell - gap) as i16);
+            c.fill_rect(cr, heat_color(t));
+            if label {
+                use core::fmt::Write;
+                tmp.clear();
+                let _ = write!(tmp, "{v:.2}");
+                small.draw_in(c, cr, tmp.as_str(), 0x101010, Align::Center);
             }
         }
     }

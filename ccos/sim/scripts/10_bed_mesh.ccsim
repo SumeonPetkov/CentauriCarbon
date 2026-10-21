@@ -1,0 +1,125 @@
+# Bed mesh with the load cells, on a bed that rises 0.4 mm across X, falls
+# 0.3 mm across Y and has a 0.15 mm dome. A 3×3 grid (probe_count 3,3) keeps
+# it short. BED_MESH_CALIBRATE as on the printer, then the ccos words
+# (S<°C>, a profile name), moves following the mesh, the Bed mesh screen,
+# BED_MESH_CLEAR and G29 S<°C>.
+option speed 3
+option bed_shape 0.4 -0.3 0.15
+option config bed_mesh probe_count 3,3
+wait_until links == 3 timeout 20
+expect mesh_title == ""
+gcode G28
+wait_until homed == "xyz" timeout 90
+wait_until busy == 0 timeout 60
+wait 0.3
+# refused before anything moves
+gcode BED_MESH_CALIBRATE pla petg
+gcode BED_MESH_CALIBRATE PROBE_COUNT=2,2
+gcode BED_MESH_CALIBRATE S500
+wait 0.5
+wait_until busy == 0 timeout 10
+expect console ~ "more than one profile name ('pla', 'petg')"
+expect console ~ "PROBE_COUNT=2,2 needs at least 3 points per axis"
+expect console ~ "bed temperature 500.0 out of range"
+expect host_z > 14.3
+expect mesh_title == ""
+# as on the printer: probe, use and save as "default"
+gcode BED_MESH_CALIBRATE
+wait 1
+wait_until busy == 0 timeout 300
+wait 0.3
+expect shutdown == "none"
+expect console ~ "Bed Mesh state has been saved to profile [ default ]"
+expect status ~ "Bed mesh: point 9 of 9"
+expect mesh_title == "default"
+expect mesh_page == "1 / 1"
+expect mesh_state == "In use"
+gcode BED_MESH_OUTPUT
+wait 0.3
+expect console ~ "Interpolation Algorithm: bicubic"
+# Z1 is the same height over the whole bed: 1 mm + fix_z_offset 0.15 − the
+# ~0.1 mm press of a tap
+gcode G1 X30 Y30 Z1 F6000\nM400
+wait 0.5
+wait_until busy == 0 timeout 30
+show x y host_z gap
+expect gap > 1.05
+expect gap < 1.18
+gcode G1 X226 Y30 Z1 F6000\nM400
+wait 0.5
+wait_until busy == 0 timeout 30
+show x y host_z gap
+expect gap > 1.05
+expect gap < 1.18
+gcode G1 X226 Y226 Z1 F6000\nM400
+wait 0.5
+wait_until busy == 0 timeout 30
+show x y host_z gap
+expect gap > 1.05
+expect gap < 1.18
+gcode G1 X30 Y226 Z1 F6000\nM400
+wait 0.5
+wait_until busy == 0 timeout 30
+show x y host_z gap
+expect gap > 1.05
+expect gap < 1.18
+gcode G1 X128 Y128 Z1 F6000\nM400
+wait 0.5
+wait_until busy == 0 timeout 30
+show x y host_z gap
+expect gap > 1.05
+expect gap < 1.18
+# ccos: heat the bed first and save under a name
+gcode BED_MESH_CALIBRATE S60 pla
+wait 1
+wait_until busy == 0 timeout 400
+wait 0.3
+expect shutdown == "none"
+expect host_bed > 58
+expect console ~ "BED_MESH_CALIBRATE: heating the bed to 60.0"
+expect console ~ "Bed Mesh state has been saved to profile [ pla ]"
+expect mesh_title == "pla"
+expect mesh_page == "2 / 2"
+expect mesh_state == "In use"
+# the screen: newest profile shown, arrows step through them
+goto mesh
+wait 0.5
+screenshot shots/mesh_pla.png
+tap "←"
+wait 0.3
+expect mesh_title == "default"
+expect mesh_page == "1 / 2"
+expect mesh_state == "Not in use"
+screenshot shots/mesh_default.png
+tap "→"
+wait 0.3
+expect mesh_title == "pla"
+# without a mesh the slope shows: the bed is ~0.28 mm lower at X30 Y226
+gcode BED_MESH_CLEAR\nG1 X30 Y226 Z1 F6000\nM400
+wait 0.5
+wait_until busy == 0 timeout 30
+show x y host_z gap
+expect gap > 1.3
+expect mesh_state == "Not in use"
+# G29 S65: purge and wipe, Z offset 0, G28 Z, bed at 65 °C, probe, save as
+# "default"
+gcode G29 S65\nM400
+wait 1
+wait_until busy == 0 timeout 600
+wait 0.3
+show bed host_x host_y status push_z
+expect shutdown == "none"
+expect bed > 61
+expect host_x > 9.99
+expect host_x < 10.01
+expect host_y > 9.99
+expect host_y < 10.01
+expect mesh_page == "1 / 2"
+expect mesh_title == "default"
+expect mesh_state == "In use"
+expect console ~ "Bed Mesh Leveling Complete"
+# the stock purge wipes 0.5 mm below its tap at Y261.5, where the printer
+# has its wiper; the emulated bed has none there, so that is a press
+expect push_z < 0.6
+expect lost_steps == 0
+expect mcu_shutdown == "none"
