@@ -10,6 +10,7 @@
 //!   tree, so an unmodified host (ccos, or anything that opens a serial port)
 //!   can connect.
 
+pub mod hx711s;
 pub mod mcu;
 pub mod sim;
 pub mod tmc;

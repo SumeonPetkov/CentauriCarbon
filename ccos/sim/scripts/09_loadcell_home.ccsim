@@ -1,0 +1,26 @@
+# G28 with [strain_gauge] enable_z_home: Z is homed on the load cells
+# (run_G28_Z): a fast tap from where Z is, then 4 mm taps at 3 mm/s from
+# Z2 until two agree within 0.05 mm. The touch point becomes
+# position_endstop (4.5 - 0.15 here), then Z goes to 10.
+option speed 3
+option config strain_gauge enable_z_home 1
+wait_until links == 3 timeout 20
+gcode G28
+wait_until homed == "xyz" timeout 90
+wait 1
+wait_until busy == 0 timeout 90
+wait 0.3
+expect console ~ "run_G28_z use probe_by_step"
+expect console ~ "o_mm0"
+expect console !~ "Homing Z failure"
+expect host_x > 129.99
+expect host_x < 130.01
+expect host_z > 9.999
+expect host_z < 10.001
+# the bed is touched at Z 4.35, so Z10 is 5.65 above it
+expect z > 5.6
+expect z < 5.7
+expect push_z < 0.5
+expect lost_steps == 0
+expect mcu_shutdown == "none"
+expect shutdown == "none"

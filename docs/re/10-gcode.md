@@ -63,6 +63,7 @@ Exactly `gcode.cpp`:
 | Moves | G0 G1 G2 G3 G4 G17 G18 G19 G20 G21 G90 G91 G92 M82 M83 M114 M220 M221 GET_POSITION SET_GCODE_OFFSET SAVE_GCODE_STATE RESTORE_GCODE_STATE MANUAL_MOVE |
 | Toolhead | M204 M211 M222 M223 M400 SET_VELOCITY_LIMIT RESET_PRINTER_PARAM M18 M84 SET_STEPPER_ENABLE STEPPER_BUZZ |
 | Homing | G28 CUSTOM_ZERO Z_AXIS_OFF_LIMIT_ACTION |
+| Load cells | STRAINGAUGE_Z_HOME STRAINGAUGE_TEST DIRZCTL READ_HX711 |
 | TMC2209 | SET_TMC_CURRENT_stepper_x/_y/_z/_extruder INIT_TMC SET_TMC_FIELD DUMP_TMC |
 | Extruder | SET_PRESSURE_ADVANCE M900 SET_EXTRUDER_STEP_DISTANCE SET_MIN_EXTRUDE_TEMP FLOW_CALIBRATION ACTIVATE_EXTRUDER RESET_EXTRUDER |
 | Input shaper | SET_INPUT_SHAPER M593 |
@@ -78,11 +79,10 @@ subsystem behind them. They are accepted, do nothing, and log
 
 | Subsystem | Commands |
 |---|---|
-| Load-cell probing | G29 PROBE PROBE_ACCURACY PROBE_CALIBRATE QUERY_PROBE CALIBRATE_Z_OFFSET CHECK_BED_MESH HOME_ACCURACY LIFT_HOT_BED MEASURE_GAP_TEST NOZZLE_CLEAR PRTOUCH_READY READ_HX711 STRAINGAUGE_TEST STRAINGAUGE_Z_HOME BED_MESH_CALIBRATE |
+| Load-cell probing | G29 PROBE PROBE_ACCURACY PROBE_CALIBRATE QUERY_PROBE CALIBRATE_Z_OFFSET CHECK_BED_MESH HOME_ACCURACY LIFT_HOT_BED MEASURE_GAP_TEST NOZZLE_CLEAR PRTOUCH_READY BED_MESH_CALIBRATE |
 | Bed mesh | BED_MESH_MAP BED_MESH_OFFSET BED_MESH_OUTPUT BED_MESH_SET_INDEX |
 | Accelerometer | SHAPER_CALIBRATE SHAPER_CALIBRATE_SCRIPT TEST_RESONANCES MEASURE_AXES_NOISE ACCELEROMETER_MEASURE_X ACCELEROMETER_QUERY_X ADXL345_DEBUG_READ_X ADXL345_DEBUG_WRITE_X |
 | Power-loss resume | BREAK_SAVE_STATUS SDCARD_PRINT_FILE_BREAK_SAVE STOP_RESUME |
-| Other | DIRZCTL |
 
 **Not on the Centauri Carbon.** Their klippy modules exist in the source
 but are not loaded by the stock `printer.cfg`, so the printer answers
@@ -172,9 +172,53 @@ BED_MESH_PROFILE.
   - It is not an error: the retract and the second pass are dropped
     (unhomed), and G28 goes on with the next axis.
   - Only a failed Z shuts the printer down ("Z-axis zeroing failed").
-  - With `[strain_gauge] enable_z_home` set, the stock G28 homes Z on
-    the load cells. The stock config has it off; ccos refuses such a G28
-    until load-cell homing is ported.
+  - With `[strain_gauge] enable_z_home` set, G28 homes Z on the load
+    cells instead (`run_G28_Z`, below). The stock config has it off.
+- **Load cells** (`strain_gauge.cpp`, `hx711s.cpp`, `dirzctl.cpp`).
+  - A tap (`probe_by_step`) goes like this:
+    1. Tare the cells (`calibration_sample`, 30 samples) and arm the
+       board (`sg_probe_check cmd=1`).
+    2. The DSP steps Z down on its own (`run_dirzctl`) at the probe
+       speed. This bypasses the motion queue, so ccos's Z does not
+       change.
+    3. The board reports the press (`sg_resp`) with the tick of its
+       knee.
+    4. Z at that tick is interpolated between the two `result_dirzctl`
+       reports (first step, stop).
+    5. With "up after", the same number of steps go back up, at 3× the
+       speed.
+  - `STRAINGAUGE_Z_HOME` taps:
+    1. Once at 6 mm/s from where Z is; that point becomes Z0 (homed).
+    2. It goes up to Z2 and taps twice at 3 mm/s (each followed by going
+       back up).
+    3. A third tap at 3 mm/s stays down, and that point becomes Z0.
+    The nozzle is left pressing on the bed.
+  - G28 with `enable_z_home` (`run_G28_Z`):
+    1. If the nozzle is above 145 °C, cool it to 140 °C with the part
+       fan at 255.
+    2. Shake Z 20 times by `shake_range` (0 in the stock config).
+    3. Tare, then one fast tap that becomes Z0, then go up to Z2.
+    4. Tap up to 4 mm at 3 mm/s until two taps in a row agree within
+       `g28_max_err` and are within 1 mm. The speed halves (down to
+       1 mm/s) after each miss. There are 10 taps per round and 3 rounds.
+    5. The touch point becomes `position_endstop` (so stock Z10 is
+       5.65 mm above the bed).
+    6. Go to Z10, then `M106 S0.00` and `M104`/`M109` back to the
+       earlier target. This turns the part fan off.
+    G28 ignores whether it worked: after 3 failed rounds it only logs
+    "Homing Z failure …".
+  - `STRAINGAUGE_TEST [X Y Z SPEED]`: move there, then tap up to 50 mm at
+    SPEED (1 mm/s) and go back up. It uses the last tare.
+    MIN_HOLD/MAX_HOLD are read but not used.
+  - `DIRZCTL [DIRECT=1] [STEP_US=1500] [STEP_CNT=256]` steps Z directly
+    and returns at once. DIRECT 1 is up.
+  - The step counts in `result_dirzctl` are 16 bits. A first tap more
+    than ~94 mm (37664 steps) above the bed wraps the arithmetic, looks
+    like a 3 mm miss, and shuts down with "No response from MCU" (stock
+    bug, kept).
+  - Only `[strain_gauge]`, `[hx711s]` and `[dirzctl]` register these
+    commands. Without them, ccos answers `unknown command`, as the
+    printer does.
 - **TMC2209 drivers.**
   - At connect, in name order (extruder, stepper_x, stepper_y,
     stepper_z): read DRV_STATUS; write SLAVECONF and GCONF; then write
@@ -250,6 +294,11 @@ BED_MESH_PROFILE.
 | M8810 | exports logs | logs "not available" | the log files are those of the stock app |
 | TMC register read failing 5 times | logs, then returns an undefined value | an error: `INIT_TMC`/`DUMP_TMC` fail; at connect "TMC <name> failed to init" is logged and the next driver is set up | undefined behaviour |
 | TMC drivers with motion locked | — | not configured (`CCOS_ENABLE_MOTION` unset: ccos drives no motor outputs) | safety on the real printer |
+| Load-cell waits | `MCUException("No response from MCU")` after 50 resends (2345 polls each) or a 100 s tare; nothing catches it | an emergency shutdown with "strain_gauge_mcu: No response from MCU" | the uncaught exception ends the stock app |
+| `READ_HX711` | waits forever for samples nothing collects | sends `query_hx711s`, logs that no samples come back, returns | a hang |
+| `cal_min_z` | spins for the two Z reports without checking for a shutdown | a shutdown ends the wait | a hang |
+| `run_G28_Z` (probe path) | no `return` statement | returns whether Z homed; G28 ignores it as before | undefined behaviour |
+| `use_probe_by_step: 0` | G28 homes Z with `homing_z_move` on the endstop, sampling the load cells | refused ("not available in ccos") | not used by the stock config |
 | Bed mesh | Z compensation from the probed mesh | none, so the nozzle sits `fix_z_offset` (0.15 mm) higher than the stock firmware with a mesh | phase 2 |
 
 ## Tests

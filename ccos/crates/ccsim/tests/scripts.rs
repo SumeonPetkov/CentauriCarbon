@@ -53,6 +53,16 @@ fn tmc_drivers() {
     run("07_tmc.ccsim");
 }
 
+#[test]
+fn load_cell_probing() {
+    run("08_loadcell.ccsim");
+}
+
+#[test]
+fn load_cell_z_homing() {
+    run("09_loadcell_home.ccsim");
+}
+
 /// Every script file has a test above.
 #[test]
 fn all_scripts_listed() {

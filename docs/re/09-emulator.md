@@ -76,6 +76,20 @@ cover. The toolhead link is throttled to 100 kB/s and the load-cell board to
   - a DIAG output (`!PG4`, `!PF6`) that asserts on a stall only in
     StealthChop, with SGTHRS > 0, TOFF > 0 and TCOOLTHRS ≥ TSTEP >
     TPWMTHRS. TSTEP comes from the actual step rate.
+* The load cells (`crates/cc-sim/src/hx711s.rs`).
+  - The bed sits on them and gives 0.5 mm (`BED_GIVE`) before Z slips.
+    `push_z` counts the press.
+  - The bridge reads 251000 counts unloaded, minus 60000 counts per mm
+    pressed, with 40-count noise.
+  - The board firmware (`hx711s.c` and its helpers) is ported for the
+    board as strapped: an HX717 half bridge on line 2 at 320 SPS. The
+    task runs every 1.5 ms.
+  - The port covers tare and the bad-cell bits, the sliding-window
+    filter, the trigger rules, the knee search, and `sg_resp` with its
+    heartbeat and repeat limits. The firmware's never-reset statics are
+    kept.
+  - `dirzctl.c` on the DSP toggles the Z step pin from its own timer.
+    Its reports carry 16-bit step counts, as on the printer.
 * Heaters as lumped thermal masses (hotend ≈ 60 W, bed ≈ 350 W, chamber
   coupled to the bed; the part fan cools the hotend), NTC 100K thermistors
   (β 4300 / 3950) on 4.7 kΩ pull-ups into 12-bit ADCs with noise.
@@ -135,6 +149,8 @@ The emulator needed — and drove — the printing core:
 | `04_faults` | open thermistor → host *thermistor fault* (stock `min_temp` is −200, so the MCU range check cannot fire); dead heater → *not heating at expected rate*; USB unplugged → MCU *Missed scheduling…* then host *no response*; restart after each; unhomed move silently dropped; out-of-range target only warned |
 | `05_stress` | G2 arcs and a 300 mm/s zig-zag while 1 in 2000 bytes are corrupted: retransmits happen, nothing is lost or late |
 | `07_tmc` | TMC2209 register images after connect, SET_TMC_CURRENT, INIT_TMC/SET_TMC_FIELD answered by the extruder driver, StallGuard on/off around homing, a broken X DIAG: X fails, G28 goes on with Y |
+| `08_loadcell` | `STRAINGAUGE_Z_HOME` (tare flags 0x8B, Z0 with the bed pressed ~0.1 mm), `STRAINGAUGE_TEST` back where it started, `DIRZCTL` moves Z without changing ccos's position, `READ_HX711` returns |
+| `09_loadcell_home` | G28 with `option config strain_gauge enable_z_home 1`: Z homed on the load cells, Z10 is 5.65 mm above the bed |
 | `06_gcode_parity` | stock parser/console behaviour (unknown commands, M21 silent, range error text, upper-casing), M106 P/S rules, SET_LED TRANSMIT, SET_PRESSURE_ADVANCE/M900 and `kin_flush_delay`, SET_INPUT_SHAPER (SHAPER_TYPE_X ignored as in the stock code), the ROOT gate in a file, PAUSE/RESUME/CANCEL_PRINT during a print |
 
 Example:
@@ -157,9 +173,12 @@ bedshot shots/cube_bed.png
 * The TMC2209 model has no current or load physics: StallGuard is ideal
   once enabled (no false or late stall detection), and the run current
   changes nothing.
-* No load-cell model (bed mesh, probing) and no resonance model: input
-  shaping changes the step times ccos sends, but the emulated machine has
-  no ringing to cancel.
+* The bed is flat and rigid apart from its linear give. The load cells see
+  no vibration, heat drift or nozzle ooze, so every tap is clean. The
+  board's shake filter and the "other trigger" rules are therefore never
+  tested by real noise.
+* No resonance model: input shaping changes the step times ccos sends,
+  but the emulated machine has no ringing to cancel.
 * `layers` counts a height once 0.05 mm of filament went there: pressure
   advance and the melt lag let a trace out while Z is still moving.
 * The melt model is one time constant, not a pressure model: it will not

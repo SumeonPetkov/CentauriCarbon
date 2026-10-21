@@ -157,6 +157,11 @@ pub struct Machine {
     /// One bit-banged TMC UART per MCU (`MCU_TMC_uart_bitbang`, shared by
     /// the drivers on the same pins).
     pub tmc_uarts: Vec<TmcUart>,
+    /// `[hx711s]`, `[strain_gauge]`, `[dirzctl] step_base`: each object
+    /// exists only with its section.
+    pub hx711s: Option<crate::loadcell::Hx711sCfg>,
+    pub strain_gauge: Option<crate::loadcell::StrainGaugeCfg>,
+    pub dirzctl_step_base: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +362,9 @@ impl Machine {
             idle_timeout: c.get_double("idle_timeout", "timeout", 1800.0),
             led_pins: [parse_pin(&c.get_string("led led1", "red_pin", "stm32:PC9")), parse_pin(&c.get_string("led led2", "red_pin", "PG15"))],
             tmc_uarts: tmc_uarts(c),
+            hx711s: crate::loadcell::Hx711sCfg::from_config(c),
+            strain_gauge: crate::loadcell::StrainGaugeCfg::from_config(c),
+            dirzctl_step_base: c.has_section("dirzctl").then(|| c.get_double("dirzctl", "step_base", 2.0)),
         }
     }
 
@@ -408,7 +416,15 @@ pub mod dsp {
     pub const BOARD_FAN: u8 = 16;
     /// TMC2209 UART shared by stepper_x/y/z (tx PE9, rx PE6).
     pub const TMCUART: u8 = 17;
-    pub const COUNT: u8 = 18;
+    /// `[dirzctl]`: Z stepped directly for load-cell probing.
+    pub const DIRZCTL: u8 = 18;
+    pub const COUNT: u8 = 19;
+}
+
+/// oids on the load-cell board.
+pub mod strain_gauge {
+    pub const HX711S: u8 = 0;
+    pub const COUNT: u8 = 1;
 }
 
 /// oids on the toolhead STM32.

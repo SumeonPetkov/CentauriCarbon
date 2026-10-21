@@ -10,6 +10,7 @@ pub mod core;
 pub mod gcode;
 pub mod heater;
 pub mod hw;
+pub mod loadcell;
 pub mod machine;
 pub mod mcu;
 pub mod motion;

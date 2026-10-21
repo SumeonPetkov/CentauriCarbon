@@ -92,6 +92,11 @@ pub trait Hardware {
     fn uart(&mut self, _mcu: McuKind, _tx_pin: u32, _rx_pin: u32, _sent: &[u8], _t: f64) -> Option<(Vec<u8>, u32)> {
         None
     }
+    /// The load-cell bridge as the HX717 converts it (counts) for a
+    /// conversion centred on `t`.
+    fn load_cell(&mut self, _mcu: McuKind, _t: f64) -> i32 {
+        0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -218,6 +223,25 @@ struct TmcUart {
     reply: Vec<u8>,
 }
 
+/// `dirzctl.c`: Z stepped by a timer that toggles the step pins, for
+/// load-cell probing.
+struct Dirzctl {
+    count: u32,
+    dir_inverts: [bool; 4],
+    step_inverts: [bool; 4],
+    step_pins: [u32; 4],
+    /// Step pin levels (toggled; a step on the edge away from `step_invert`).
+    step_levels: [bool; 4],
+    /// Dir level while running (`deal_dirs`); restored afterwards, which
+    /// the stepper's own `dir_level` already models.
+    dir_levels: [bool; 4],
+    r_steps: u32,
+    r_steps_fix: u32,
+    n_ticks: u32,
+    r_stop: bool,
+    wake: Option<u64>,
+}
+
 enum Obj {
     Unused,
     Stepper(Stepper),
@@ -227,7 +251,9 @@ enum Obj {
     Endstop(Endstop),
     Trsync(Trsync),
     TmcUart(TmcUart),
-    /// Load-cell, fan tach, accelerometer…: accepted, not simulated.
+    Dirzctl(Dirzctl),
+    Hx711s(Box<crate::hx711s::Hx711s>),
+    /// Fan tach, accelerometer…: accepted, not simulated.
     Other,
 }
 
@@ -470,6 +496,8 @@ impl VirtualMcu {
                     u.active = false;
                     u.wake = None;
                 }
+                Obj::Dirzctl(d) => d.wake = None,
+                Obj::Hx711s(h) => h.shutdown(),
                 _ => {}
             }
         }
@@ -893,10 +921,172 @@ impl VirtualMcu {
                 u.reply.clear();
             }
 
-            // Accepted but not simulated: load-cell ADCs, fan tachs,
-            // accelerometers, buttons, displays, direct Z control.
+            // dirzctl.c
+            "config_dirzctl" => {
+                self.send_debug_dirzctl(a("oid"), &[a("oid"), a("z_count")]);
+                let d = Dirzctl {
+                    count: a("z_count") as u32,
+                    dir_inverts: [false; 4],
+                    step_inverts: [false; 4],
+                    step_pins: [0; 4],
+                    step_levels: [false; 4],
+                    dir_levels: [false; 4],
+                    r_steps: 0,
+                    r_steps_fix: 0,
+                    n_ticks: 0,
+                    r_stop: false,
+                    wake: None,
+                };
+                let count = d.count;
+                self.set_obj(a("oid"), Obj::Dirzctl(d), hw);
+                if count > 4 {
+                    self.shutdown_named("Max of 4 Z AXIS", hw);
+                }
+            }
+            "add_dirzctl" => {
+                let oid = a("oid");
+                self.send_debug_dirzctl(oid, &[oid, a("index"), a("dir_pin"), a("step_pin"), a("dir_invert"), a("step_invert")]);
+                let index = a("index") as usize;
+                if index >= 4 {
+                    self.shutdown_named("Set direct z ctl maximum count", hw);
+                    return;
+                }
+                if let Some(Obj::Dirzctl(d)) = self.objs.get_mut(oid as usize) {
+                    d.dir_inverts[index] = a("dir_invert") != 0;
+                    d.step_inverts[index] = a("step_invert") != 0;
+                    d.step_pins[index] = a("step_pin") as u32;
+                    d.step_levels[index] = a("step_invert") != 0;
+                }
+            }
+            "run_dirzctl" => {
+                let now = self.now;
+                let freq = self.freq;
+                let Some(Obj::Dirzctl(d)) = self.objs.get_mut(a("oid") as usize) else { return };
+                if a("step_cnt") == 0 {
+                    d.r_stop = true;
+                    return;
+                }
+                d.r_stop = false;
+                let direct = a("direct") != 0;
+                for i in 0..d.count.min(4) as usize {
+                    d.dir_levels[i] = direct != d.dir_inverts[i];
+                }
+                d.n_ticks = ((a("step_us") as u32 as f64 / 1_000_000.0) * freq) as u32 / 2;
+                d.r_steps = (a("step_cnt") as u32).wrapping_mul(2);
+                d.r_steps_fix = d.r_steps;
+                d.wake = Some(now + d.n_ticks as u64);
+            }
+
+            // hx711s.c
+            "config_hx711s" => {
+                let keys = ["oid", "hx711_count", "channels", "rest_ticks", "kalman_q", "kalman_r", "max_th", "min_th", "k"];
+                let args = keys.map(|k| a(k) as u32);
+                match crate::hx711s::Hx711s::config(args, self.now, self.freq) {
+                    Ok((h, d)) => {
+                        self.set_obj(a("oid"), Obj::Hx711s(Box::new(h)), hw);
+                        self.send_debug_hx711s(a("oid"), d);
+                    }
+                    Err(s) => self.shutdown_named(s, hw),
+                }
+            }
+            "add_hx711s" => {
+                let oid = a("oid");
+                let Some(Obj::Hx711s(h)) = self.objs.get(oid as usize) else { return };
+                let r = h.add(["oid", "index", "clk_pin", "sdo_pin"].map(|k| a(k) as u32));
+                self.send_debug_hx711s(oid, ["oid", "index", "clk_pin", "sdo_pin"].map(|k| a(k) as u32));
+                if let Err(s) = r {
+                    self.shutdown_named(s, hw);
+                }
+            }
+            "query_hx711s" | "sg_probe_check" | "calibration_sample" => {
+                let (oid, now) = (a("oid"), self.now);
+                let Some(Obj::Hx711s(h)) = self.objs.get_mut(oid as usize) else { return };
+                let d = match name {
+                    "query_hx711s" => {
+                        h.query(a("times_read") as u32, now);
+                        return;
+                    }
+                    "sg_probe_check" => h.probe_check(a("x") as i32, a("y") as i32, a("z") as i32, a("cmd") as i32, now),
+                    _ => h.calibration_sample(a("times_read") as u32, now),
+                };
+                self.send_debug_hx711s(oid, d);
+            }
+
+            // Accepted but not simulated: fan tachs, accelerometers,
+            // buttons, displays.
             n if n.starts_with("config_") => self.set_obj(a("oid"), Obj::Other, hw),
             _ => {}
+        }
+    }
+
+    /// `debug_dirzctl`: the command's arguments echoed (unset ones read 0).
+    fn send_debug_dirzctl(&mut self, oid: i64, args: &[i64]) {
+        let v = |i: usize| Arg::Int(args.get(i).copied().unwrap_or(0) as u32 as i64);
+        let a = [("oid", Arg::Int(oid as u8 as i64)), ("arg[0]", v(0)), ("arg[1]", v(1)), ("arg[2]", v(2)), ("arg[3]", v(3)), ("arg[4]", v(4)), ("arg[5]", v(5))];
+        self.send("debug_dirzctl", &a);
+    }
+
+    fn send_debug_hx711s(&mut self, oid: i64, d: crate::hx711s::Debug4) {
+        let a = [
+            ("oid", Arg::Int(oid as u8 as i64)),
+            ("arg[0]", Arg::Int(d[0] as i64)),
+            ("arg[1]", Arg::Int(d[1] as i64)),
+            ("arg[2]", Arg::Int(d[2] as i64)),
+            ("arg[3]", Arg::Int(d[3] as i64)),
+        ];
+        self.send("debug_hx711s", &a);
+    }
+
+    /// `dirzctl_event` (+ `dirzctl_task` sending the status right away).
+    fn dirzctl_event(&mut self, oid: usize, hw: &mut dyn Hardware) {
+        let now = self.now;
+        let t = self.time_of(now);
+        let kind = self.kind;
+        let Some(Obj::Dirzctl(d)) = self.objs.get_mut(oid) else { return };
+        for i in 0..d.count.min(4) as usize {
+            d.step_levels[i] = !d.step_levels[i];
+            if d.step_levels[i] != d.step_inverts[i] {
+                hw.step(kind, d.step_pins[i], d.dir_levels[i], t);
+            }
+        }
+        d.r_steps = d.r_steps.wrapping_sub(1);
+        let done = d.r_steps == 0 || (d.r_steps % 2 == 0 && d.r_stop);
+        let status = done || d.r_steps == d.r_steps_fix.wrapping_sub(1);
+        if done {
+            d.wake = None;
+            d.r_stop = false;
+        } else {
+            d.wake = Some(now + d.n_ticks as u64);
+        }
+        if status {
+            // send_status: full steps still to go; the report truncates to 16 bits
+            let steps = (d.r_steps - d.r_steps % 2) / 2;
+            self.send("result_dirzctl", &[("oid", Arg::Int(oid as i64)), ("step", Arg::Int(steps as u16 as i64)), ("tick", Arg::Int(now as u32 as i64))]);
+        }
+    }
+
+    /// The load-cell board: an HX717 conversion (`k` = 1) or the task timer.
+    fn hx711s_event(&mut self, oid: usize, k: u8, hw: &mut dyn Hardware) {
+        let now = self.now;
+        if k == 1 {
+            let t = self.time_of(now) - crate::hx711s::HX717_PERIOD / 2.0;
+            let v = hw.load_cell(self.kind, t);
+            if let Some(Obj::Hx711s(h)) = self.objs.get_mut(oid) {
+                h.conversion(v, now);
+            }
+            return;
+        }
+        let Some(Obj::Hx711s(h)) = self.objs.get_mut(oid) else { return };
+        if let Some(r) = h.timer(now) {
+            let a = [
+                ("oid", Arg::Int(h.oid as i64)),
+                ("vd", Arg::Int(r.vd as i64)),
+                ("it", Arg::Int(r.it as i64)),
+                ("nt", Arg::Int(r.nt as i64)),
+                ("r", Arg::Int(r.r as i64)),
+                ("tt", Arg::Int(r.tt as i64)),
+            ];
+            self.send("sg_resp", &a);
         }
     }
 
@@ -1235,6 +1425,17 @@ impl VirtualMcu {
                         consider(w, oid, 0)
                     }
                 }
+                Obj::Dirzctl(d) => {
+                    if let Some(w) = d.wake {
+                        consider(w, oid, 0)
+                    }
+                }
+                Obj::Hx711s(h) => {
+                    if let Some(w) = h.wake {
+                        consider(w, oid, 0)
+                    }
+                    consider(h.exi_next, oid, 1)
+                }
                 _ => {}
             }
         }
@@ -1311,6 +1512,8 @@ impl VirtualMcu {
                     Obj::Analog(_) => self.analog_event(oid, hw),
                     Obj::Endstop(_) => self.endstop_event(oid, hw),
                     Obj::TmcUart(_) => self.tmcuart_event(oid, hw),
+                    Obj::Dirzctl(_) => self.dirzctl_event(oid, hw),
+                    Obj::Hx711s(_) => self.hx711s_event(oid, k, hw),
                     Obj::Trsync(_) => {
                         if k == 1 {
                             if let Some(Obj::Trsync(ts)) = self.objs.get_mut(oid) {

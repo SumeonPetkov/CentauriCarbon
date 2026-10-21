@@ -41,6 +41,9 @@ pub struct Options {
     pub verbose: bool,
     /// Where relative screenshot paths go.
     pub out_dir: PathBuf,
+    /// `user_printer.cfg` entries (section, key, value) written before ccos
+    /// starts.
+    pub config: Vec<(String, String, String)>,
 }
 
 impl Default for Options {
@@ -53,6 +56,7 @@ impl Default for Options {
             corrupt: 0.0,
             verbose: false,
             out_dir: PathBuf::from("."),
+            config: Vec::new(),
         }
     }
 }
@@ -81,7 +85,8 @@ pub const QUERIES: &[(&str, &str)] = &[
     ("host_x, host_y, host_z", "position ccos shows"),
     ("extruded, retracted, cold_extrusion", "filament (mm) pushed through a hot nozzle / pulled back / pushed while cold"),
     ("layers, bbox_x0, bbox_y0, bbox_x1, bbox_y1, bbox_w, bbox_h, max_z", "what was printed"),
-    ("push_x, push_y, push_z", "deepest push past a frame limit / into the bed (mm)"),
+    ("push_x, push_y, push_z", "deepest push past a frame limit / into the bed (mm; the bed gives 0.5 mm on its load cells)"),
+    ("sg_reports, sg_calibration", "load-cell reports ccos received / the last tare result (0x80 = tared, low bits = cells that read bad)"),
     ("lost_steps", "steps sent to disabled drivers"),
     ("tmc_<x|y|z|e>_<reg>", "TMC2209 register (gconf, gstat, ifcnt, slaveconf, ihold_irun, tpowerdown, tpwmthrs, tcoolthrs, sgthrs, chopconf, pwmconf), microsteps, writes"),
     ("pressure_advance, smooth_time, kin_flush_delay", "ccos's extruder settings (s for the times)"),
@@ -126,6 +131,15 @@ impl Emu {
         }
         let mut hw = Hardware::sim(&opts.dir);
         hw.gcode_dir = gcode_dir.clone();
+        if !opts.config.is_empty() {
+            let dir = hw.config_dir.clone().unwrap_or_else(|| opts.dir.join("board-resource"));
+            std::fs::create_dir_all(&dir)?;
+            let mut text = String::new();
+            for (section, key, value) in &opts.config {
+                let _ = writeln!(text, "[{section}]\n{key} : {value}\n");
+            }
+            std::fs::write(dir.join("user_printer.cfg"), text)?;
+        }
         let rt = Runtime::start(hw);
         rt.state().echo = opts.verbose;
         Ok(Emu { rt, sim, opts, gcode_dir })
@@ -230,6 +244,10 @@ impl Emu {
         if name == "retransmits" {
             let c = self.rt.printer.lock();
             return num(c.mcus.iter().flatten().map(|m| m.retransmits).sum::<u64>() as f64);
+        }
+        if name == "sg_reports" || name == "sg_calibration" {
+            let c = self.rt.printer.lock();
+            return num(if name == "sg_reports" { c.sg.reports as f64 } else { c.sg.is_calibration as f64 });
         }
         if let Some(r) = self.motion_probe(name) {
             return Some(r);

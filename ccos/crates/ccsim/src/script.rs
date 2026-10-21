@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! option speed 20                 # thermal speed-up (also: corrupt <p>, bootloader)
+//! option config strain_gauge enable_z_home 1   # a user_printer.cfg entry
 //! wait_until links == 3 timeout 20
 //! tap "Light"                     # a visible widget by its text (or: tap 120 200)
 //! expect light == 1
@@ -116,6 +117,13 @@ pub fn parse(text: &str, opts: &mut Options) -> Result<Script, String> {
                     "speed" => opts.speed = v.trim().parse().map_err(|_| err("option speed <number>".into()))?,
                     "corrupt" => opts.corrupt = v.trim().parse().map_err(|_| err("option corrupt <probability>".into()))?,
                     "bootloader" => opts.bootloader = true,
+                    "config" => {
+                        let mut it = v.split_whitespace();
+                        match (it.next(), it.next(), it.next()) {
+                            (Some(s), Some(k), Some(val)) => opts.config.push((s.into(), k.into(), val.into())),
+                            _ => return Err(err("option config <section> <key> <value>".into())),
+                        }
+                    }
                     _ => return Err(err(format!("unknown option '{k}'"))),
                 }
                 continue;

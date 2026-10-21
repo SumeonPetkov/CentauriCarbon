@@ -24,7 +24,7 @@ use crate::clock::now;
 use crate::config::Configs;
 use crate::heater::{Heater, PwmOut, MAX_HEAT_TIME};
 use crate::hw::Hardware;
-use crate::machine::{self, dsp, toolhead, FanCfg, Machine};
+use crate::machine::{self, dsp, strain_gauge, toolhead, FanCfg, Machine};
 use crate::mcu::{ntc_frac, ntc_temp, Mcu, Result};
 use crate::motion::itersolve::{Kin, StepperKin};
 use crate::motion::planner::{Move, Planner};
@@ -159,6 +159,8 @@ pub struct Core {
     last_move_add: f64,
     /// Replies the G-code thread waits for (trsync_state, stepper_position…).
     pub responses: VecDeque<(Target, OwnedMessage)>,
+    /// Load cells and direct Z control, as their response handlers left them.
+    pub sg: crate::loadcell::SgState,
     /// Pending fan callbacks: token → fan index.
     fan_tokens: Vec<(u32, usize)>,
     next_token: u32,
@@ -311,6 +313,7 @@ impl Core {
             trdispatch: None,
             last_move_add: 0.0,
             responses: VecDeque::with_capacity(64),
+            sg: Default::default(),
             fan_tokens: Vec::new(),
             next_token: 1,
             busy_printing: false,
@@ -517,6 +520,7 @@ impl Core {
         self.flush_step_generation();
         self.trapq.clear();
         self.etrapq.clear();
+        self.planner.clear_history();
         for i in 0..4 {
             let mm = self.kins[i].position_from_coord(pos);
             self.steppers[i].set_position_mm(mm);
@@ -1011,6 +1015,35 @@ impl Core {
                         _ => {}
                     }
                 }
+                // HX711S::_handle_sg_resp
+                "sg_resp" if target == Target::StrainGauge && m.int("oid") == Some(strain_gauge::HX711S as i64) => {
+                    let mcu = self.mcus[i].as_ref().unwrap();
+                    let at = |k: &str| mcu.clock.time(mcu.clock.extend(m.int(k).unwrap_or(0) as u32));
+                    let (trig, now_t) = (at("nt"), at("tt"));
+                    let sg = &mut self.sg;
+                    sg.trigger_tick = m.int("nt").unwrap_or(0) as u32;
+                    sg.trigger_timestamp = trig;
+                    sg.time_timestamp = now_t;
+                    sg.is_calibration = m.int("vd").unwrap_or(0) as u8;
+                    sg.is_trigger = m.int("r").unwrap_or(0) as u8;
+                    sg.reports += 1;
+                    let r = sg.is_trigger;
+                    if r & 0x80 != 0 {
+                        self.log(format!("........please check {}sg install dirrection.........", r & 0x1F));
+                    }
+                }
+                // HX711S::_handle_debug_hx711s
+                "debug_hx711s" if target == Target::StrainGauge && m.int("oid") == Some(strain_gauge::HX711S as i64) => {
+                    self.sg.probe_calibration_response = m.int("arg[0]").unwrap_or(0) as u32;
+                    self.sg.probe_cmd_response = m.int("arg[1]").unwrap_or(0) as u32;
+                }
+                // DirZCtl::_handle_result_dirzctl
+                "result_dirzctl" if target == Target::Dsp && m.int("oid") == Some(dsp::DIRZCTL as i64) => {
+                    let mcu = self.mcus[i].as_ref().unwrap();
+                    let tick = m.int("tick").unwrap_or(0) as u32;
+                    let time = mcu.clock.time(mcu.clock.extend(tick));
+                    self.sg.dirzctl.push(crate::loadcell::DirzResult { step: m.int("step").unwrap_or(0) as u32, tick, time });
+                }
                 "trsync_state" | "stepper_position" | "endstop_state" | "pong" | "tmcuart_response" => {
                     if m.name() == "trsync_state" {
                         self.trdispatch_state(target, &m);
@@ -1106,7 +1139,13 @@ fn configure(mcu: &mut Mcu, mc: &Machine, t: Target, motion: bool) -> Result<()>
     let count = match t {
         Target::Dsp => dsp::COUNT,
         Target::Toolhead => toolhead::COUNT,
-        Target::StrainGauge => 0,
+        Target::StrainGauge => {
+            if mc.hx711s.is_some() {
+                strain_gauge::COUNT
+            } else {
+                0
+            }
+        }
     };
     cmds.push(format!("allocate_oids count={count}"));
     if motion {
@@ -1138,6 +1177,21 @@ fn configure(mcu: &mut Mcu, mc: &Machine, t: Target, motion: bool) -> Result<()>
                 }
                 cmds.push(format!("config_trsync oid={}", dsp::TRSYNC));
                 dout(&mut cmds, dsp::BED_HEATER, pn("PG13"), 0, 0, MAX_HEAT_TIME, mc.heaters[1].pwm_cycle_time);
+                // DirZCtl::_build_config: the Z steppers' pins
+                if mc.dirzctl_step_base.is_some() {
+                    let zs: Vec<&machine::StepperDef> = mc.steppers.iter().filter(|s| s.kin[2] != 0.0).collect();
+                    cmds.push(format!("config_dirzctl oid={} z_count={}", dsp::DIRZCTL, zs.len()));
+                    for (i, s) in zs.iter().enumerate() {
+                        cmds.push(format!(
+                            "add_dirzctl oid={} index={i} dir_pin={} step_pin={} dir_invert={} step_invert={}",
+                            dsp::DIRZCTL,
+                            pin(&s.dir)?,
+                            pin(&s.step)?,
+                            s.dir.invert as u8,
+                            s.step.invert as u8
+                        ));
+                    }
+                }
             }
             dout(&mut cmds, dsp::LIGHT, pin(&mc.led_pins[1])?, 0, 0, 0.0, machine::LED_CYCLE_TIME);
             adcs.push((dsp::ADC_BED, pn("PB14"), mc.heaters[1].beta, mc.heaters[1].min_temp, mc.heaters[1].max_temp));
@@ -1150,7 +1204,12 @@ fn configure(mcu: &mut Mcu, mc: &Machine, t: Target, motion: bool) -> Result<()>
             dout(&mut cmds, toolhead::LED, pin(&mc.led_pins[0])?, 0, 0, 0.0, machine::LED_CYCLE_TIME);
             adcs.push((toolhead::ADC_HOTEND, pn("PA3"), mc.heaters[0].beta, mc.heaters[0].min_temp, mc.heaters[0].max_temp));
         }
-        Target::StrainGauge => {}
+        Target::StrainGauge => {
+            // a sensor only: configured with motion locked too
+            if let Some(h) = &mc.hx711s {
+                cmds.extend(h.config_cmds(strain_gauge::HX711S, |p| pin_number(&p.name, ppb))?);
+            }
+        }
     }
     for (oid, p, _, _, _) in &adcs {
         cmds.push(format!("config_analog_in oid={oid} pin={p}"));

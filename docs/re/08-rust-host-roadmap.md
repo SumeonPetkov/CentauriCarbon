@@ -91,11 +91,19 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
    stock trsync protocol, trdispatch included. Both are tested against
    the emulator's driver model; neither has been checked on a real
    printer yet.
-8. **Load-cell probing** — the hard, Centauri-specific part: HX711/HX717
-   streaming from the bed MCU, filters (`strain_gauge*.cpp`, `filter.cpp`,
-   `tiny_ekf`), trigger detection, bed mesh with bicubic/lagrange interpolation.
-   Port by reading Elegoo's C++ closely; COSMOS's load-cell work is a second
-   reference.
+8. **Load-cell probing** — the hard, Centauri-specific part.
+   - 🟡 Done: Z probing (`loadcell.rs`, `gcode/loadcell.rs`).
+     - Tare and trigger run on the load-cell board (`hx711s.c` does the
+       filtering and the knee search; the host only reads `sg_resp`).
+     - Z is stepped directly through `dirzctl`.
+     - Ported: `STRAINGAUGE_Z_HOME`, `STRAINGAUGE_TEST`, `DIRZCTL`,
+       `READ_HX711`, and G28 with `enable_z_home`.
+     - Tested against the emulator's port of the board firmware; not
+       yet on a printer.
+   - Still to do: G29/`BED_MESH_CALIBRATE`, `CHECK_BED_MESH`,
+     `PRTOUCH_READY`, `MEASURE_GAP_TEST`, `NOZZLE_CLEAR`, the `PROBE*`
+     commands, and the mesh itself (bicubic/Lagrange interpolation, Z
+     compensation).
 9. ✅ **G-code interpreter** (`gcode/`, `config.rs`): a port of the stock
    one. It has the same parser, the full command set the Centauri Carbon
    loads, and the same defaults, range checks and internal scripts (G28,

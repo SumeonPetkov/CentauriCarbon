@@ -1,0 +1,54 @@
+# The load cells under the bed (stock config: G28 still homes Z on PG8).
+# STRAINGAUGE_Z_HOME taps the bed with the DSP stepping Z on its own
+# (dirzctl) while the load-cell board watches for the press. Then a
+# STRAINGAUGE_TEST probe, a raw DIRZCTL move and READ_HX711.
+option speed 3
+wait_until links == 3 timeout 20
+gcode G28
+wait_until homed == "xyz" timeout 90
+wait_until busy == 0 timeout 60
+wait 0.3
+gcode STRAINGAUGE_Z_HOME
+wait 1
+wait_until busy == 0 timeout 90
+wait 0.3
+# tared: one HX717 reads the bridge on line 2; lines 0, 1 and 3 read 0 and
+# are flagged (bits 0, 1, 3), as on the printer
+expect sg_calibration >= 0x8B
+expect sg_calibration < 0x90
+expect console ~ "end wipe nozzle"
+# Z = 0 is where the last tap stopped, with the bed pushed down a little
+expect host_z > -0.001
+expect host_z < 0.001
+expect z < 0
+expect z > -0.5
+expect homed == "xyz"
+# STRAINGAUGE_TEST: go to Z5, probe down at 1 mm/s, come back up
+gcode STRAINGAUGE_TEST Z=5
+wait 1
+wait_until busy == 0 timeout 60
+wait 0.3
+expect console ~ "probe_by_step trigger!!!"
+expect console ~ "up_after"
+expect host_z > 4.999
+expect host_z < 5.001
+expect z > 4.5
+expect z < 5
+# DIRZCTL: 400 steps up (1 mm); ccos's position does not change
+gcode DIRZCTL DIRECT=1 STEP_CNT=400
+wait 1.5
+wait_until busy == 0 timeout 10
+wait 0.3
+expect z > 5.5
+expect z < 6
+expect host_z > 4.999
+expect host_z < 5.001
+gcode READ_HX711 C=5
+wait 0.5
+wait_until busy == 0 timeout 10
+wait 0.3
+expect console ~ "READ_HX711: the load-cell board"
+expect push_z < 0.5
+expect lost_steps == 0
+expect mcu_shutdown == "none"
+expect shutdown == "none"

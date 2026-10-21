@@ -52,14 +52,7 @@ impl Exec {
         }
         // PrinterHoming::cmd_G28: with [strain_gauge] enable_z_home the load
         // cells home Z (the stock printer.cfg has it off: PG8 is used)
-        let z_wanted = !["X", "Y"].iter().any(|a| !g.get_string(a, "").is_empty()) || !g.get_string("Z", "").is_empty();
-        let sg_home = {
-            let c = self.core();
-            c.cfgs.printer.has_section("strain_gauge") && c.cfgs.printer.get_bool("strain_gauge", "enable_z_home", true)
-        };
-        if z_wanted && sg_home {
-            return Err(Abort("G28: Z homing with the load cells ([strain_gauge] enable_z_home) is not available in ccos yet".into()));
-        }
+        let sg_home = self.core().m.strain_gauge.is_some_and(|s| s.enable_z_home);
         let (temp, smoothed, prev_target, sz) = {
             let c = self.core();
             (c.m.safe_z.temp, c.heaters[0].smoothed, c.heaters[0].target, c.m.safe_z)
@@ -94,7 +87,12 @@ impl Exec {
                 } else {
                     self.manual_move([Some(sz.x), Some(sz.y), None, None], sz.speed)?;
                 }
-                self.home_rails(2)?;
+                if sg_home {
+                    // run_G28_Z(homing_state): its result is not looked at
+                    self.run_g28_z()?;
+                } else {
+                    self.home_rails(2)?;
+                }
             }
             Ok(())
         })();

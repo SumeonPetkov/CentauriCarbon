@@ -222,6 +222,16 @@ pub struct PrintStats {
 }
 
 const LAYER_MIN_MM: f64 = 0.05;
+
+/// The bed rests on four load cells: the nozzle can push it down this far
+/// (gap below 0) before Z slips.
+pub const BED_GIVE: f64 = 0.5;
+/// The bridge reading falls by this much per mm the bed is pushed down
+/// (the HX717 reads the four half-bridge cells as one bridge).
+pub const LOAD_COUNTS_PER_MM: f64 = 60_000.0;
+/// Bridge reading with the bed unloaded, and its noise (1 σ, counts).
+pub const BRIDGE_ZERO: f64 = 251_000.0;
+pub const BRIDGE_NOISE: f64 = 40.0;
 /// Nozzle flow lag (s): the stock pressure_advance value is tuned for it.
 pub const MELT_TAU: f64 = 0.04;
 /// Melt is laid down this far behind the newest step (longer than an MCU's
@@ -265,6 +275,9 @@ pub struct World {
     nozzle_hist: VecDeque<(f64, [f64; 3])>,
     hist_base: [f64; 3],
     latest_t: f64,
+    /// Recent gaps (time, z) for the load cells, which sample on their own
+    /// MCU's clock.
+    z_hist: VecDeque<(f64, f64)>,
     pub log: Vec<(f64, String)>,
     noise: u64,
     pub t: f64,
@@ -361,6 +374,7 @@ impl World {
             nozzle_hist: VecDeque::new(),
             hist_base: cfg.start,
             latest_t: 0.0,
+            z_hist: VecDeque::new(),
             log: Vec::new(),
             noise: 0x9e37_79b9_7f4a_7c15,
             t: 0.0,
@@ -432,7 +446,8 @@ impl World {
         let b = self.motors[1].travel * XY_STEP;
         let z = self.motors[2].travel * Z_STEP;
         let cand = [(a + b) * 0.5 + self.offset[0], (a - b) * 0.5 + self.offset[1], z + self.offset[2]];
-        let lim = [self.cfg.x_limits, self.cfg.y_limits, self.cfg.z_limits];
+        let z_lim = (self.cfg.z_limits.0 - BED_GIVE, self.cfg.z_limits.1);
+        let lim = [self.cfg.x_limits, self.cfg.y_limits, z_lim];
         for i in 0..3 {
             if axis_mask & (1 << i) == 0 {
                 continue;
@@ -447,6 +462,16 @@ impl World {
                 self.stalled[i] = false;
             }
             self.pos[i] = c;
+        }
+        // the bed pushed down on its load cells counts as a push into it
+        self.push_mm[2] = self.push_mm[2].max(self.cfg.z_limits.0 - self.pos[2]);
+    }
+
+    /// Nozzle-to-bed gap at `t` (from the recent Z steps).
+    fn gap_at(&self, t: f64) -> f64 {
+        match self.z_hist.iter().rposition(|(ht, _)| *ht <= t) {
+            Some(i) => self.z_hist[i].1,
+            None => self.z_hist.front().map_or(self.pos[2], |(_, z)| *z),
         }
     }
 
@@ -605,9 +630,13 @@ impl Hardware for World {
             2 => {
                 let was = self.stalled[2];
                 self.carriage_moved(0b100);
-                if self.stalled[2] && !was && self.pos[2] <= self.cfg.z_limits.0 {
-                    self.note_event(t, format!("nozzle pressed into the bed at x={:.1} y={:.1}", self.pos[0], self.pos[1]));
+                if self.stalled[2] && !was && self.pos[2] <= self.cfg.z_limits.0 - BED_GIVE {
+                    self.note_event(t, format!("nozzle pressed the bed down to its stop at x={:.1} y={:.1}", self.pos[0], self.pos[1]));
                 }
+                while self.z_hist.len() > 2 && self.z_hist[1].0 < t - 0.2 {
+                    self.z_hist.pop_front();
+                }
+                self.z_hist.push_back((t, self.pos[2]));
             }
             _ => return self.extrude(d as f64 * scale * w.step_dist, t),
         }
@@ -679,6 +708,16 @@ impl Hardware for World {
 
     fn note(&mut self, mcu: McuKind, t: f64, msg: &str) {
         self.note_event(t, format!("{}: {msg}", mcu.name()));
+    }
+
+    fn load_cell(&mut self, mcu: McuKind, t: f64) -> i32 {
+        if mcu != McuKind::LoadCell {
+            return 0;
+        }
+        let depth = (self.cfg.z_limits.0 - self.gap_at(t)).max(0.0);
+        // ~normal noise: sum of four uniforms
+        let n: f64 = (0..4).map(|_| self.rand() - 0.5).sum::<f64>() * BRIDGE_NOISE * 3f64.sqrt();
+        (BRIDGE_ZERO + n - LOAD_COUNTS_PER_MM * depth).round() as i32
     }
 
     fn uart(&mut self, mcu: McuKind, tx_pin: u32, rx_pin: u32, sent: &[u8], t: f64) -> Option<(Vec<u8>, u32)> {

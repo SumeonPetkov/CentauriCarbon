@@ -19,6 +19,7 @@ pub mod parse;
 
 mod cmds;
 mod home;
+mod loadcell;
 mod para;
 mod print;
 mod tmc;
@@ -135,6 +136,8 @@ pub struct Exec {
     reported: std::collections::HashSet<&'static str>,
     /// `[tmc2209 …]` drivers, in config order (owned by the G-code thread).
     tmc: Vec<crate::tmc::Tmc>,
+    /// What the last load-cell probe found.
+    sg: loadcell::SgVals,
 }
 
 /// `G`/`M` list and the coverage table: every command the stock firmware
@@ -306,7 +309,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("BREAK_SAVE_STATUS", "power-loss resume"),
     ("CALIBRATE_Z_OFFSET", "load-cell probing"),
     ("CHECK_BED_MESH", "load-cell probing"),
-    ("DIRZCTL", "direct Z control"),
     ("G29", "load-cell probing"),
     ("HOME_ACCURACY", "load-cell probing"),
     ("LIFT_HOT_BED", "load-cell probing"),
@@ -318,13 +320,10 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("PROBE_CALIBRATE", "load-cell probing"),
     ("PRTOUCH_READY", "load-cell probing"),
     ("QUERY_PROBE", "load-cell probing"),
-    ("READ_HX711", "load-cell probing"),
     ("SDCARD_PRINT_FILE_BREAK_SAVE", "power-loss resume"),
     ("SHAPER_CALIBRATE", "accelerometer"),
     ("SHAPER_CALIBRATE_SCRIPT", "accelerometer"),
     ("STOP_RESUME", "power-loss resume"),
-    ("STRAINGAUGE_TEST", "load-cell probing"),
-    ("STRAINGAUGE_Z_HOME", "load-cell probing"),
     ("TEST_RESONANCES", "accelerometer"),
 ];
 
@@ -357,6 +356,7 @@ impl Exec {
             mesh_enabled: true,
             reported: Default::default(),
             tmc,
+            sg: Default::default(),
         }
     }
 
@@ -407,6 +407,9 @@ impl Exec {
         }
         if self.tmc_handles(&key) {
             return self.cmd_tmc(&key, g);
+        }
+        if self.loadcell_handles(&key) {
+            return self.cmd_loadcell(&key, g);
         }
         match key.as_str() {
             // gcode.cpp built-ins

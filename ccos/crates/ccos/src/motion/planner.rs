@@ -405,6 +405,12 @@ impl Planner {
         self.junction_flush = LOOKAHEAD_FLUSH_TIME;
     }
 
+    /// Forget the executed moves (`set_position`: the time line no longer
+    /// says where the toolhead is).
+    pub fn clear_history(&mut self) {
+        self.segments.clear();
+    }
+
     /// Position on the time line at print time `t` (None when idle).
     pub fn position_at(&self, t: f64) -> Option<[f64; 4]> {
         let s = self.segments.iter().find(|s| s.end_time() >= t).or(self.segments.back())?;
