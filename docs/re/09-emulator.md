@@ -143,6 +143,26 @@ The emulator needed — and drove — the printing core:
 * `runtime.rs`: the UI loop independent of `/dev/fb0`, shared by the device
   and the emulator. New Print screen (`ui/screens/print.toml`).
 
+## In Docker
+
+`ccos/sim/docker/` runs ccsim in a container and serves its window to a web
+browser: Xvfb, then x11vnc, then noVNC on port 6080. It needs nothing on the
+host but Docker; see its README:
+`docker compose -f ccos/sim/docker/compose.yaml up --build`, then open
+<http://localhost:6080>.
+
+The page also has a G-code console and a file panel. Both use
+`ccsim --control <addr>` (`crates/ccsim/src/control.rs`), a small HTTP server
+in the emulator's interactive mode:
+- `GET /console` returns ccos's console ring.
+- `POST /gcode` queues lines as a `Job::Gcode`; each line is echoed into the
+  console as `> line`.
+- `GET /files` lists the G-code files.
+- `POST /upload|print|delete?name=` manage files. A print starts the way the
+  Print screen starts one, and is refused while a print runs.
+
+It is emulator-only and needs no changes to ccos.
+
 ## Test scripts
 
 `ccos/sim/scripts/*.ccsim` (syntax in `crates/ccsim/src/script.rs`):

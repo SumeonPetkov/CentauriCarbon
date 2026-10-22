@@ -1,0 +1,7 @@
+# The build context is the repository root; only these are needed.
+*
+!ccos
+!firmware/resources/e100/configs
+**/target
+ccos/sim/docker/gcodes
+ccos/sim/docker/out

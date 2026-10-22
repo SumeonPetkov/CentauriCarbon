@@ -1,0 +1,17 @@
+# docker compose -f ccos/sim/docker/compose.yaml up --build
+# then open http://localhost:6080. Ctrl+C stops it.
+services:
+  ccsim:
+    build:
+      context: ../../..
+      dockerfile: ccos/sim/docker/Dockerfile
+    image: ccsim
+    ports:
+      - "6080:6080"
+      # the page's G-code console and file upload (ccsim --control)
+      - "6081:6081"
+    volumes:
+      # put .gcode files here (ccos/sim/docker/gcodes) to print them
+      - ./gcodes:/gcodes
+      - ./out:/out
+    command: ["--speed", "3"]

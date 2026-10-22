@@ -22,6 +22,8 @@ OPTIONS:
   --headless           no window (scripts)
   --window             show the window while a script runs
   --verbose            print MCU/physics events and ccos log lines
+  --control <addr>     window only: HTTP control on <addr> (port, or host:port) to send
+                       G-code, read the console and upload/print files (emulator only)
 
 Script commands: option, wait, wait_until, expect, tap, goto, gcode, command,
 print, inject, clear, screenshot, bedshot, echo — see crates/ccsim/src/script.rs.
@@ -32,6 +34,7 @@ fn main() {
     let mut o = Options::default();
     let (mut headless, mut window, mut printer_only) = (false, false, false);
     let mut script_path: Option<PathBuf> = None;
+    let mut control: Option<String> = None;
     let mut it = args.iter();
     let need = |v: Option<&String>, f: &str| -> String {
         v.cloned().unwrap_or_else(|| {
@@ -50,6 +53,7 @@ fn main() {
             "--headless" => headless = true,
             "--window" => window = true,
             "--verbose" => o.verbose = true,
+            "--control" => control = Some(need(it.next(), a)),
             "--printer-only" => printer_only = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
@@ -109,7 +113,7 @@ fn main() {
             }
         }
         None if headless => Err("nothing to do: give a script, or drop --headless for the window".into()),
-        None => interactive(o),
+        None => interactive(o, control),
     };
     match result {
         Ok(()) => println!("ccsim: PASS"),
@@ -121,11 +125,32 @@ fn main() {
 }
 
 #[cfg(feature = "window")]
-fn interactive(o: Options) -> Result<(), String> {
+fn interactive(o: Options, control: Option<String>) -> Result<(), String> {
     let mut view = ccsim::window::View::open("ccsim — Centauri Carbon emulator (ccos)")?;
     let mut emu = Emu::start(o).map_err(|e| e.to_string())?;
     println!("ccsim: G-code folder {}", emu.gcode_dir.display());
+    let remote = match control {
+        Some(addr) => {
+            let rx = ccsim::control::start(&addr, emu.gcode_dir.clone()).map_err(|e| format!("--control {addr}: {e}"))?;
+            println!("ccsim: control on {addr}");
+            Some(rx)
+        }
+        None => None,
+    };
     while view.is_open() {
+        for job in remote.iter().flat_map(|rx| rx.try_iter()) {
+            match job {
+                // like the Print screen's button: refused while a print runs
+                ccos::gcode::Job::Print(p) => {
+                    if matches!(emu.rt.state().print.phase, ccos::app::Phase::Printing | ccos::app::Phase::Paused) {
+                        ccos::gcode::console("> print refused: a print is already running");
+                    } else {
+                        emu.rt.print_path(p);
+                    }
+                }
+                j => emu.rt.send(j),
+            }
+        }
         let t = view.touch();
         if let Some(ccos::runtime::Event::Exit) = emu.frame(t) {
             break;
@@ -138,7 +163,7 @@ fn interactive(o: Options) -> Result<(), String> {
 }
 
 #[cfg(not(feature = "window"))]
-fn interactive(_: Options) -> Result<(), String> {
+fn interactive(_: Options, _: Option<String>) -> Result<(), String> {
     Err("built without the `window` feature; run a script instead".into())
 }
 

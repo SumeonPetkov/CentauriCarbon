@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ccsim</title>
+<style>
+  :root { color-scheme: dark; --bg: #101012; --panel: #1a1a1d; --line: #333338; --text: #ccc; --dim: #888; --accent: #2ecc40; --err: #ff6b5e; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+  button { background: #2a2a2e; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 3px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #666; }
+  button.on { border-color: var(--accent); color: #fff; }
+  .bar { display: flex; gap: 6px; align-items: center; padding: 6px; }
+  .bar span { min-width: 4em; text-align: center; }
+  iframe { border: 0; display: block; }
+  #tools { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 10px; width: min(1380px, 100% - 32px); padding: 10px 0 16px; }
+  @media (max-width: 760px) { #tools { grid-template-columns: minmax(0, 1fr); } }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .box h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--dim); display: flex; justify-content: space-between; }
+  #log { height: 220px; overflow: auto; margin: 0; font: 12px ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; background: #0c0c0e; border-radius: 4px; padding: 6px; }
+  #log .cmd { color: #7fb7ff; } #log .err { color: var(--err); }
+  form { display: flex; gap: 6px; }
+  #cmd { flex: 1; min-width: 0; background: #0c0c0e; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 5px 8px; font: 13px ui-monospace, Consolas, monospace; }
+  #drop { border: 1px dashed #555; border-radius: 4px; padding: 14px 8px; text-align: center; color: var(--dim); cursor: pointer; }
+  #drop.over { border-color: var(--accent); color: #fff; }
+  #files { list-style: none; margin: 0; padding: 0; max-height: 190px; overflow: auto; }
+  #files li { display: flex; gap: 6px; align-items: center; padding: 3px 0; border-bottom: 1px solid #262629; }
+  #files li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #files li small { color: var(--dim); }
+  #msg { color: var(--dim); min-height: 1.2em; }
+  #msg.err { color: var(--err); }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="minus" title="Smaller">−</button>
+  <span id="pct"></span>
+  <button id="plus" title="Bigger">+</button>
+  <button id="real" title="One emulator pixel per screen pixel">Actual size</button>
+  <button id="fit" title="As big as the browser window, above the panels">Fit</button>
+</div>
+<iframe id="vnc" src="vnc.html?autoconnect=true&amp;resize=scale&amp;reconnect=true&amp;show_dot=true"></iframe>
+<div id="tools">
+  <section class="box">
+    <h2>G-code console <button id="clear" title="Hide the lines shown so far">Clear</button></h2>
+    <pre id="log"></pre>
+    <form id="send">
+      <input id="cmd" autocomplete="off" spellcheck="false" placeholder="G28, M114, BED_MESH_CALIBRATE S60 pla … (↑/↓ history)">
+      <button>Send</button>
+    </form>
+  </section>
+  <section class="box">
+    <h2>G-code files</h2>
+    <div id="drop">Drop .gcode files here, or click to choose</div>
+    <input id="pick" type="file" accept=".gcode,.gco,.g" multiple hidden>
+    <ul id="files"></ul>
+    <div id="msg"></div>
+  </section>
+</div>
+<script>
+  // ---- zoom: ccsim's window is 2x LCD + bed view, plus the state lines
+  const W = 1380, H = 664;
+  const frame = document.getElementById("vnc");
+  const pct = document.getElementById("pct");
+  const tools = document.getElementById("tools");
+  let mode = "real", zoom = 1;
+  try { const s = JSON.parse(localStorage.getItem("ccsim-view")); if (s) { mode = s.mode; zoom = s.zoom; } } catch (e) {}
+  function fitZoom() {
+    const room = innerHeight - document.querySelector(".bar").offsetHeight - tools.offsetHeight;
+    return Math.min(innerWidth / W, Math.max(room, 200) / H) * devicePixelRatio;
+  }
+  function apply() {
+    if (mode === "fit") zoom = fitZoom();
+    if (mode === "real") zoom = Math.min(1, innerWidth * devicePixelRatio / W);
+    zoom = Math.max(0.2, Math.min(zoom, 4));
+    // zoom = screen pixels per emulator pixel
+    frame.style.width = (W * zoom / devicePixelRatio) + "px";
+    frame.style.height = (H * zoom / devicePixelRatio) + "px";
+    pct.textContent = Math.round(zoom * 100) + "%";
+    document.getElementById("real").classList.toggle("on", mode === "real");
+    document.getElementById("fit").classList.toggle("on", mode === "fit");
+    try { localStorage.setItem("ccsim-view", JSON.stringify({ mode, zoom })); } catch (e) {}
+  }
+  document.getElementById("minus").onclick = () => { mode = "manual"; zoom /= 1.15; apply(); };
+  document.getElementById("plus").onclick = () => { mode = "manual"; zoom *= 1.15; apply(); };
+  document.getElementById("real").onclick = () => { mode = "real"; apply(); };
+  document.getElementById("fit").onclick = () => { mode = "fit"; apply(); };
+  addEventListener("resize", apply);
+  apply();
+
+  // ---- emulator control (ccsim --control, port 6081)
+  const API = location.protocol + "//" + location.hostname + ":6081";
+  const call = async (method, path, body) => {
+    const r = await fetch(API + path, { method, body, headers: body === undefined ? {} : { "Content-Type": "text/plain" } });
+    const t = await r.text();
+    if (!r.ok) throw new Error(t.trim() || r.statusText);
+    return t;
+  };
+  const msg = document.getElementById("msg");
+  const say = (t, err) => { msg.textContent = t; msg.className = err ? "err" : ""; };
+
+  // console: the last 256 lines, polled. "Clear" hides the lines there now;
+  // as the ring drops old lines, what is left of them is a prefix of the new
+  // list that equals a suffix of the cleared one.
+  const log = document.getElementById("log");
+  let lines = [], cleared = [], offline = false;
+  function hiddenCount(now) {
+    for (let k = Math.min(now.length, cleared.length); k > 0; k--) {
+      let same = true;
+      for (let i = 0; i < k && same; i++) same = now[i] === cleared[cleared.length - k + i];
+      if (same) return k;
+    }
+    return 0;
+  }
+  async function poll() {
+    try {
+      const now = (await call("GET", "/console")).split("\n").filter(l => l !== "");
+      if (offline || now.join("\n") !== lines.join("\n")) render(now);
+      lines = now; offline = false;
+    } catch (e) {
+      if (!offline) { log.textContent = "(no connection to the emulator's control port — is it running?)"; offline = true; }
+    }
+    setTimeout(poll, 600);
+  }
+  function render(now) {
+    const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+    log.replaceChildren(...now.slice(hiddenCount(now)).map(l => {
+      const d = document.createElement("div");
+      d.textContent = l;
+      if (l.startsWith("> ")) d.className = "cmd";
+      else if (/^(error|!!)|shutdown/i.test(l)) d.className = "err";
+      return d;
+    }));
+    if (stick) log.scrollTop = log.scrollHeight;
+  }
+  document.getElementById("clear").onclick = () => { cleared = lines.slice(); render(lines); };
+  poll();
+
+  const cmd = document.getElementById("cmd");
+  let hist = [], hpos = 0;
+  try { hist = JSON.parse(localStorage.getItem("ccsim-history")) || []; } catch (e) {}
+  hpos = hist.length;
+  document.getElementById("send").onsubmit = async (e) => {
+    e.preventDefault();
+    const t = cmd.value.trim();
+    if (!t) return;
+    if (hist[hist.length - 1] !== t) hist.push(t);
+    hist = hist.slice(-100); hpos = hist.length;
+    try { localStorage.setItem("ccsim-history", JSON.stringify(hist)); } catch (e) {}
+    cmd.value = "";
+    log.scrollTop = log.scrollHeight;
+    try { await call("POST", "/gcode", t); } catch (err) { say("Send failed: " + err.message, true); }
+  };
+  cmd.onkeydown = (e) => {
+    if (e.key === "ArrowUp" && hpos > 0) { cmd.value = hist[--hpos]; e.preventDefault(); }
+    if (e.key === "ArrowDown") { hpos = Math.min(hist.length, hpos + 1); cmd.value = hist[hpos] || ""; e.preventDefault(); }
+  };
+
+  // files
+  const list = document.getElementById("files");
+  const size = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+  async function refresh() {
+    try {
+      const rows = (await call("GET", "/files")).split("\n").filter(Boolean).map(r => r.split("\t"));
+      list.replaceChildren(...rows.map(([name, bytes]) => {
+        const li = document.createElement("li");
+        const n = document.createElement("span"); n.textContent = name; n.title = name;
+        const s = document.createElement("small"); s.textContent = size(+bytes);
+        const p = document.createElement("button"); p.textContent = "Print";
+        p.onclick = () => act("/print", name, "Printing " + name);
+        const d = document.createElement("button"); d.textContent = "Delete";
+        d.onclick = () => { if (confirm("Delete " + name + "?")) act("/delete", name, "Deleted " + name); };
+        li.append(n, s, p, d);
+        return li;
+      }));
+    } catch (e) { /* the console shows the connection state */ }
+  }
+  async function act(path, name, done) {
+    try { await call("POST", path + "?name=" + encodeURIComponent(name)); say(done); } catch (e) { say(e.message, true); }
+    refresh();
+  }
+  async function upload(files) {
+    for (const f of files) {
+      say("Uploading " + f.name + " …");
+      try {
+        const r = await fetch(API + "/upload?name=" + encodeURIComponent(f.name), { method: "POST", body: f });
+        if (!r.ok) throw new Error((await r.text()).trim());
+        say("Uploaded " + f.name);
+      } catch (e) { say(f.name + ": " + e.message, true); }
+    }
+    refresh();
+  }
+  const drop = document.getElementById("drop"), pick = document.getElementById("pick");
+  drop.onclick = () => pick.click();
+  pick.onchange = () => { upload([...pick.files]); pick.value = ""; };
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); upload([...e.dataTransfer.files]); };
+  refresh();
+  setInterval(refresh, 5000);
+</script>
+</body>
+</html>

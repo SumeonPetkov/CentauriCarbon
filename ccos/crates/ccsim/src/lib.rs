@@ -6,6 +6,7 @@
 //! machine. Only the touchscreen and framebuffer are replaced (by a window
 //! or by a script).
 
+pub mod control;
 pub mod script;
 #[cfg(feature = "window")]
 pub mod window;
