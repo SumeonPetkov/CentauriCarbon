@@ -71,6 +71,7 @@ Exactly `gcode.cpp`:
 | Heaters | M104 M109 M140 M190 M105 SET_HEATER_TEMPERATURE TEMPERATURE_WAIT TURN_OFF_HEATERS M301 M130 M131 M132 PID_CALIBRATE PID_CALIBRATE_ALL PID_CALIBRATE_HOTBED PID_CALIBRATE_NOZZLE |
 | Fans, LEDs | M106 M107 SET_FAN_SPEED SET_LED_led1 SET_LED_led2 |
 | Print job | SDCARD_PRINT_FILE SDCARD_RESET_FILE SET_PRINT_STATS_INFO M117 PAUSE RESUME CLEAR_PAUSE CANCEL_PRINT STOP_PRINT M75 M76 M77 M601 M602 M603 |
+| Power-loss resume | BREAK_SAVE_STATUS SDCARD_PRINT_FILE_BREAK_SAVE STOP_RESUME |
 | Filament | M600 LOAD_FILAMENT MOVE_TO_EXTRUDE CUT_OFF_FILAMENT EXTRUDE_FILAMENT CHANGE_FILAMENT_SET_ACTIVE CHANGE_FILAMENT_SET_BUSY CHANGE_FILAMENT_SET_CHECK_MOVE_IGNORE M729 WIPE_NOZZLE |
 | Bed mesh | G29 G29.1 BED_MESH_CALIBRATE BED_MESH_SET_INDEX BED_MESH_OUTPUT BED_MESH_MAP BED_MESH_OFFSET BED_MESH_APPLICATIONS BED_MESH_CLEAR |
 | System | ROOT UNROOT M8000–M8826 (all 165), SET_IDLE_TIMEOUT UPDATE_IDLE_TIMER M112 RESTART FIRMWARE_RESTART ECHO STATUS HELP G M M110 M115 |
@@ -83,7 +84,6 @@ subsystem behind them. They are accepted, do nothing, and log
 |---|---|
 | Load-cell probing | PROBE PROBE_ACCURACY PROBE_CALIBRATE QUERY_PROBE CALIBRATE_Z_OFFSET CHECK_BED_MESH HOME_ACCURACY LIFT_HOT_BED MEASURE_GAP_TEST NOZZLE_CLEAR PRTOUCH_READY |
 | Accelerometer | SHAPER_CALIBRATE SHAPER_CALIBRATE_SCRIPT TEST_RESONANCES MEASURE_AXES_NOISE ACCELEROMETER_MEASURE_X ACCELEROMETER_QUERY_X ADXL345_DEBUG_READ_X ADXL345_DEBUG_WRITE_X |
-| Power-loss resume | BREAK_SAVE_STATUS SDCARD_PRINT_FILE_BREAK_SAVE STOP_RESUME |
 
 **Not on the Centauri Carbon.** Their klippy modules exist in the source
 but are not loaded by the stock `printer.cfg`, so the printer answers
@@ -342,6 +342,56 @@ BED_MESH_PROFILE.
   scripts from `pause_resume.cpp` and `change_filament.cpp` word for word.
   Five minutes after a pause, the nozzle is cooled to
   min(saved target, 45 °C) and the part fan is turned off.
+- **Power-loss resume** (`break_save.cpp`, `src/breaksave.rs`,
+  `src/gcode/breaksave.rs`).
+  - A thread polls GPIOG(0) (gpio192, high = mains lost) every
+    millisecond. It turns on capacitor charging, GPIOC(1), at start.
+    On an outage it stops charging, switches the capacitor onto the
+    rail (GPIOG(11)), waits 200 ms and checks again. A glitch logs
+    "power outages interference signal detected." and charging resumes.
+  - A real outage while printing stops the file reader (`do_pause`) and
+    writes `/board-resource/break_save0.gcode`, an INI file. It holds the
+    `virtual_sd`, `print_stats`, `gcode_move`, toolhead, fan and heater
+    status: the same sections and keys as stock, with values as
+    `%f`/`1`/`0`.
+  - The thread then ends, so there is no detection until the next boot.
+    It also ends after an outage with nothing to save (not printing), as
+    stock does.
+  - Only with sysconf `power_off_resume_print` on (the stock default).
+    The System screen has the switch.
+  - At boot, if a save names a file, the "Kind Reminder" prompt offers
+    to resume. **Cancel** adds the saved print time to `cumulative_time`
+    and deletes the saves. **Resume** prints the file again.
+  - `SDCARD_PRINT_FILE` of the file a save names resumes it:
+    1. Layer counters and print time are restored, the file seeks to the
+       saved line, and Z is set from the saved stepper position.
+    2. M140/M104/M190/M109 to the saved targets (truncated to whole
+       degrees), then the fans.
+    3. `STOP_RESUME` lifts Z 10 mm, homes X/Y and purges 8×15 mm at
+       the pause position. It wipes (M729), goes back over the part and
+       down to the saved height, then the file goes on.
+    4. G90/G91 and M82/M83 are set as saved.
+    5. The print runs at 50 % speed for 3 minutes.
+  - Any `SDCARD_PRINT_FILE` deletes all saves, even with the switch off.
+    A save left over with the switch off still resumes when its file is
+    printed again.
+  - The save keeps the file line the G-code thread was on and each
+    stepper's *commanded* position. The moves still buffered in the
+    toolhead are skipped on resume, and Z is off by whatever the MCU
+    had not stepped yet.
+  - The X/Y "stepper" positions are CoreXY A/B (x+y, x−y), and
+    `STOP_RESUME`'s G28 X Y makes them irrelevant.
+  - `G28 X Y` inside `STOP_RESUME` queries the Z endstop before the
+    10 mm lift has run. Near the bed it reads triggered, so
+    `Z_AXIS_OFF_LIMIT_ACTION` lifts another 10 mm and the purge happens
+    ~20 mm up.
+  - `STOP_RESUME` writes `is_z_homing` into the hard-coded
+    `/board-resource/break_save0.gcode`.
+  - `BREAK_SAVE_STATUS` does nothing: its body is commented out.
+    `gcode_cmds_before/after` are read and never used.
+  - `filament_used` is saved as 0, because ccos does not count it yet.
+    Fan `rpm` is 0, because ccos has no tachometer. Print history is not
+    in ccos, so Cancel doesn't mark the job failed.
 - **ROOT gate.** M8xxx lines in a print file are ignored unless `ROOT` ran
   earlier in that file. Exceptions: M8016 is the inverse (it only works from
   a file), and M8803/M8807 are never gated. The flag resets when the file
@@ -406,6 +456,9 @@ here; the additions only give meaning to lines the stock firmware ignores.
 | `G29` Z offset | `M8233 S%.3f` given an `int` | `M8233 S0.000 P1` | undefined behaviour |
 | `G29`/probing without `[strain_gauge]` | dereferences null | probing refused with an error | undefined behaviour |
 | Shutdown after a probe error | reason "" | the error text, so the screen says why | display only |
+| Resume `set_position` | given X, Y, Z only; the toolhead reads E past the end | E keeps its current value | undefined behaviour |
+| After a power-loss save | `while(1){}` until the capacitor runs out | the watcher thread ends | undefined behaviour |
+| Power-loss save path | `/board-resource/` | the config folder (`<sim dir>/board-resource` in the emulator) | same folder on the printer |
 
 ## Tests
 
@@ -426,3 +479,6 @@ here; the additions only give meaning to lines the stock firmware ignores.
     DIAG wire) with G28 carrying on with Y. The emulated drivers
     microstep at their pin default (1/8, 1/32 or 1/16 by address) and
     never stall-detect unless configured like this.
+  - `11_power_loss` cuts the power mid-print, then checks the save file,
+    the boot prompt, `STOP_RESUME`, the finished part and the Cancel
+    path.

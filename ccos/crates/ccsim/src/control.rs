@@ -8,6 +8,8 @@
 //!   POST /upload?name=<file>   body: the file
 //!   POST /print?name=<file>
 //!   POST /delete?name=<file>
+//!   GET  /power                "1" while mains is on, else "0"
+//!   POST /power?on=0|1         cut / restore mains (power-loss resume)
 //!
 //! Commands go to the main loop over a channel (the runtime lives there);
 //! a print in progress holds them until it ends, as on the printer.
@@ -15,15 +17,26 @@
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use ccos::gcode::Job;
+
+/// Mains on; the main loop keeps it current for `GET /power`.
+pub static POWERED: AtomicBool = AtomicBool::new(true);
+
+/// What the control server asks of the main loop.
+pub enum Request {
+    Job(Job),
+    /// Mains on (true) or cut (false).
+    Power(bool),
+}
 
 /// Largest upload accepted.
 const MAX_BODY: usize = 1 << 30;
 
 /// Listen on `addr` ("6081" = 127.0.0.1:6081); jobs arrive on the receiver.
-pub fn start(addr: &str, gcode_dir: PathBuf) -> io::Result<Receiver<Job>> {
+pub fn start(addr: &str, gcode_dir: PathBuf) -> io::Result<Receiver<Request>> {
     let addr = if addr.contains(':') { addr.to_string() } else { format!("127.0.0.1:{addr}") };
     let listener = TcpListener::bind(&addr)?;
     let (tx, rx) = channel();
@@ -40,7 +53,7 @@ pub fn start(addr: &str, gcode_dir: PathBuf) -> io::Result<Receiver<Job>> {
 
 struct Reply(u16, String);
 
-fn serve(stream: TcpStream, tx: &Sender<Job>, dir: &Path) -> io::Result<()> {
+fn serve(stream: TcpStream, tx: &Sender<Request>, dir: &Path) -> io::Result<()> {
     let mut r = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     r.read_line(&mut line)?;
@@ -65,7 +78,17 @@ fn serve(stream: TcpStream, tx: &Sender<Job>, dir: &Path) -> io::Result<()> {
         r.read_exact(&mut body)?;
         let (path, query) = target.split_once('?').unwrap_or((&target, ""));
         let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).map(decode);
-        handle(&method, path, name, body, tx, dir)
+        if (method.as_str(), path) == ("POST", "/power") {
+            match query.split('&').find_map(|kv| kv.strip_prefix("on=")) {
+                Some(v @ ("0" | "1")) => match tx.send(Request::Power(v == "1")) {
+                    Ok(()) => Reply(200, "ok\n".into()),
+                    Err(_) => Reply(500, "emulator stopped\n".into()),
+                },
+                _ => Reply(400, "need on=0 or on=1\n".into()),
+            }
+        } else {
+            handle(&method, path, name, body, tx, dir)
+        }
     };
     let Reply(code, text) = reply;
     let status = match code {
@@ -86,9 +109,9 @@ fn serve(stream: TcpStream, tx: &Sender<Job>, dir: &Path) -> io::Result<()> {
     )
 }
 
-fn handle(method: &str, path: &str, name: Option<String>, body: Vec<u8>, tx: &Sender<Job>, dir: &Path) -> Reply {
+fn handle(method: &str, path: &str, name: Option<String>, body: Vec<u8>, tx: &Sender<Request>, dir: &Path) -> Reply {
     let ok = || Reply(200, "ok\n".into());
-    let send = |j: Job| match tx.send(j) {
+    let send = |j: Job| match tx.send(Request::Job(j)) {
         Ok(()) => ok(),
         Err(_) => Reply(500, "emulator stopped\n".into()),
     };
@@ -97,6 +120,7 @@ fn handle(method: &str, path: &str, name: Option<String>, body: Vec<u8>, tx: &Se
     }
     match (method, path) {
         ("GET", "/console") => Reply(200, ccos::gcode::console_lines().join("\n")),
+        ("GET", "/power") => Reply(200, if POWERED.load(Ordering::Relaxed) { "1" } else { "0" }.into()),
         ("GET", "/files") => {
             let mut s = String::new();
             for n in ccos::gcode::list_files(dir) {

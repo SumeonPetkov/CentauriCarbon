@@ -138,7 +138,31 @@ fn interactive(o: Options, control: Option<String>) -> Result<(), String> {
         None => None,
     };
     while view.is_open() {
-        for job in remote.iter().flat_map(|rx| rx.try_iter()) {
+        for req in remote.iter().flat_map(|rx| rx.try_iter()) {
+            use ccsim::control::Request;
+            let job = match req {
+                Request::Power(true) => {
+                    if !emu.powered {
+                        ccos::gcode::console("> power on");
+                        emu.power_on();
+                    }
+                    ccsim::control::POWERED.store(true, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
+                Request::Power(false) => {
+                    if emu.powered {
+                        ccos::gcode::console("> power cut");
+                        emu.power_cut();
+                    }
+                    ccsim::control::POWERED.store(false, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
+                Request::Job(_) if !emu.powered => {
+                    ccos::gcode::console("> refused: the printer is off");
+                    continue;
+                }
+                Request::Job(j) => j,
+            };
             match job {
                 // like the Print screen's button: refused while a print runs
                 ccos::gcode::Job::Print(p) => {

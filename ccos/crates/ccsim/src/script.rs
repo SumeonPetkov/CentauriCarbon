@@ -16,6 +16,8 @@
 //! expect cold_extrusion < 0.01
 //! inject hotend_heater_dead       # fault; `clear <fault>` removes it
 //! screenshot out/home.png         # LCD as PNG; bedshot = printed part, top view
+//! power_cut                       # mains lost (ccos saves the print, then stops)
+//! power_on                        # mains back: ccos boots again
 //! echo any text
 //! show x host_x nozzle             # print values
 //! ```
@@ -65,6 +67,7 @@ pub enum Step {
     Bedshot(String),
     Inject(Fault, bool),
     Echo(String),
+    Power(bool),
     Show(Vec<String>),
 }
 
@@ -161,6 +164,8 @@ pub fn parse(text: &str, opts: &mut Options) -> Result<Script, String> {
                 Step::Inject(f, cmd == "inject")
             }
             "echo" => Step::Echo(rest.to_string()),
+            "power_cut" => Step::Power(false),
+            "power_on" => Step::Power(true),
             "show" => Step::Show(rest.split_whitespace().map(String::from).collect()),
             _ => return Err(err(format!("unknown command '{cmd}'"))),
         };
@@ -344,6 +349,8 @@ impl Runner {
                 }
                 Step::Inject(f, on) => emu.sim.lock().inject(*f, *on),
                 Step::Echo(t) => println!("ccsim: {t}"),
+                Step::Power(true) => emu.power_on(),
+                Step::Power(false) => emu.power_cut(),
                 Step::Show(names) => {
                     let mut out = String::new();
                     for n in names {
@@ -391,6 +398,7 @@ fn describe(s: &Step) -> String {
         Step::Bedshot(p) => format!("bedshot {p}"),
         Step::Inject(f, on) => format!("{} {}", if *on { "inject" } else { "clear" }, f.name()),
         Step::Echo(t) => format!("echo {t}"),
+        Step::Power(on) => (if *on { "power_on" } else { "power_cut" }).into(),
         Step::Show(n) => format!("show {}", n.join(" ")),
     }
 }

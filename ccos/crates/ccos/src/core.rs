@@ -161,6 +161,8 @@ pub struct Core {
     pub responses: VecDeque<(Target, OwnedMessage)>,
     /// Load cells and direct Z control, as their response handlers left them.
     pub sg: crate::loadcell::SgState,
+    /// Power-loss resume: the print snapshot and the watcher's flags.
+    pub bs: crate::breaksave::BreakSave,
     /// Pending fan callbacks: token → fan index.
     fan_tokens: Vec<(u32, usize)>,
     next_token: u32,
@@ -265,6 +267,7 @@ fn steppers_new(m: &Machine) -> [StepQueue; 4] {
 impl Core {
     fn new(hw: Hardware, cfgs: Configs, ui: Ui, wake_fd: i32) -> Self {
         let m = Machine::from_config(&cfgs.printer);
+        let bs = crate::breaksave::BreakSave::new(&cfgs);
         // InputShaper::InputShaper (an unknown type name maps to 0, "zv")
         let c = &cfgs.printer;
         let ty = |k: &str| shaper::parse(&c.get_string("input_shaper", k, &c.get_string("input_shaper", "shaper_type", "mzv"))).unwrap_or(0);
@@ -314,6 +317,7 @@ impl Core {
             last_move_add: 0.0,
             responses: VecDeque::with_capacity(64),
             sg: Default::default(),
+            bs,
             fan_tokens: Vec::new(),
             next_token: 1,
             busy_printing: false,

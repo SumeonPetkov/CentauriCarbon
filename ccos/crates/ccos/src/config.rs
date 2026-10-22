@@ -151,6 +151,39 @@ impl Config {
         }
     }
 
+    /// `GetInt(…, minval, maxval)`: an out-of-range value is reported and
+    /// clamped.
+    pub fn get_int_clamped(&self, section: &str, key: &str, def: i64, min: i64, max: i64) -> i64 {
+        let v = self.get_int(section, key, def);
+        if v < min {
+            crate::gcode::console(&format!("error on {section}: {key} must have minimum of {min}"));
+            min
+        } else if v > max {
+            crate::gcode::console(&format!("error on {section}: {key} must have maximum of {max}"));
+            max
+        } else {
+            v
+        }
+    }
+
+    /// `GetDouble(…, minval)`: an out-of-range value is only reported.
+    pub fn get_double_min(&self, section: &str, key: &str, def: f64, min: f64) -> f64 {
+        let v = self.get_double(section, key, def);
+        if v < min {
+            crate::gcode::console(&format!("error on {section}: {key} must have minimum of {}", crate::gcode::parse::cpp_double(min)));
+        }
+        v
+    }
+
+    /// `GetDouble(…, minval, maxval)`: an out-of-range value is only reported.
+    pub fn get_double_range(&self, section: &str, key: &str, def: f64, min: f64, max: f64) -> f64 {
+        let v = self.get_double_min(section, key, def, min);
+        if v > max {
+            crate::gcode::console(&format!("error on {section}: {key} must have maximum of {}", crate::gcode::parse::cpp_double(max)));
+        }
+        v
+    }
+
     pub fn get_bool(&self, section: &str, key: &str, def: bool) -> bool {
         match self.get(section, key) {
             Some(v) if !v.is_empty() => matches!(v, "1" | "true" | "TRUE" | "True"),

@@ -54,6 +54,7 @@ impl Runtime {
             None => crate::config::Configs::stock(),
         };
         let printer = Printer::new(hw, cfgs, ui.clone());
+        ui.lock().power_resume = printer.lock().bs.enable;
         let ctl = Arc::new(Control::default());
         let (tx, rx) = std::sync::mpsc::channel();
         let p1 = printer.clone();
@@ -64,12 +65,15 @@ impl Runtime {
             .stack_size(512 * 1024)
             .spawn(move || crate::gcode::run(p2, c2, rx))
             .expect("spawn gcode thread");
+        // main.cpp's break_save_task
+        let p3 = printer.clone();
+        let bs = std::thread::Builder::new().name("ccos-powerloss".into()).stack_size(128 * 1024).spawn(move || crate::breaksave::run_watch(p3)).expect("spawn power-loss thread");
         Runtime {
             ui,
             printer,
             ctl,
             jobs: Some(tx),
-            threads: vec![io, gc],
+            threads: vec![io, gc, bs],
             engine: Engine::new(&ui::SCREENS, ui::START),
             canvas: Canvas::new(480, 272),
             dirty: Vec::with_capacity(16),
@@ -98,6 +102,12 @@ impl Runtime {
             self.dirty.extend_from_slice(d.rects());
             a
         };
+        // a power-loss save found at boot: the stock prompt
+        if self.ui.lock().resume_offer.is_some() && self.engine.screen().name != "resume" {
+            if let Some(i) = ui::SCREENS.iter().position(|s| s.name == "resume") {
+                self.engine.goto(i as u8);
+            }
+        }
         if self.engine.current() != self.last_screen {
             self.last_screen = self.engine.current();
             if self.engine.screen().name == "print" {
@@ -174,6 +184,28 @@ impl Runtime {
             }
             Cmd::RefreshFiles => self.send(Job::RefreshFiles),
             Cmd::MeshPrev | Cmd::MeshNext => self.ui.lock().mesh_step(c == Cmd::MeshNext),
+            Cmd::ResumePrint | Cmd::ResumeCancel => {
+                let offer = self.ui.lock().resume_offer.take();
+                self.engine.goto(ui::START);
+                if let Some(path) = offer {
+                    if c == Cmd::ResumePrint {
+                        self.print_path(path.into());
+                    } else {
+                        self.send(Job::DiscardBreakSave);
+                    }
+                }
+            }
+            Cmd::TogglePowerResume => {
+                let mut p = self.printer.lock();
+                p.bs.enable = !p.bs.enable;
+                let on = p.bs.enable;
+                p.cfgs.sysconf.set_int("system", "power_off_resume_print", on as i64);
+                if let Some(path) = p.cfgs.path("sysconf.cfg") {
+                    let _ = p.cfgs.sysconf.write(&path);
+                }
+                p.log(format!("resume print switch:{}", on as i32));
+                p.ui.lock().power_resume = on;
+            }
         }
         None
     }

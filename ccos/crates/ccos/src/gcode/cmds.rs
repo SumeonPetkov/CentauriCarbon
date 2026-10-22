@@ -10,6 +10,7 @@ impl Exec {
 
     /// `move_with_transform`: bed mesh → `ToolHead::move1`.
     pub(super) fn move_to(&mut self, pos: [f64; 4], speed: f64) -> Result<bool, Abort> {
+        self.bs_publish();
         if self.bm.is_some() {
             return self.mesh_move(pos, speed);
         }

@@ -17,6 +17,7 @@
 
 pub mod parse;
 
+mod breaksave;
 mod cmds;
 mod home;
 mod loadcell;
@@ -71,6 +72,8 @@ pub enum Job {
     Reset(Target),
     Probe,
     RefreshFiles,
+    /// The resume prompt's Cancel: forget the power-loss save.
+    DiscardBreakSave,
 }
 
 /// Flags the screen sets without waiting for the G-code thread.
@@ -140,6 +143,8 @@ pub struct Exec {
     tmc: Vec<crate::tmc::Tmc>,
     /// What the last load-cell probe found.
     sg: loadcell::SgVals,
+    /// What the last power-loss save held (`s_saved_print_para`).
+    bsp: breaksave::Saved,
 }
 
 /// `G`/`M` list and the coverage table: every command the stock firmware
@@ -296,14 +301,12 @@ pub const COMMANDS: &[&str] = &[
 ];
 
 /// Commands that exist on the printer but whose subsystem ccos does not
-/// have yet (load cells, bed mesh, accelerometer,
-/// power-loss resume). They are accepted and logged.
+/// have yet (load-cell probing, accelerometer). They are accepted and logged.
 pub const NOT_YET: &[(&str, &str)] = &[
     ("ACCELEROMETER_MEASURE_X", "accelerometer"),
     ("ACCELEROMETER_QUERY_X", "accelerometer"),
     ("ADXL345_DEBUG_READ_X", "accelerometer"),
     ("ADXL345_DEBUG_WRITE_X", "accelerometer"),
-    ("BREAK_SAVE_STATUS", "power-loss resume"),
     ("CALIBRATE_Z_OFFSET", "load-cell probing"),
     ("CHECK_BED_MESH", "load-cell probing"),
     ("HOME_ACCURACY", "load-cell probing"),
@@ -316,10 +319,8 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("PROBE_CALIBRATE", "load-cell probing"),
     ("PRTOUCH_READY", "load-cell probing"),
     ("QUERY_PROBE", "load-cell probing"),
-    ("SDCARD_PRINT_FILE_BREAK_SAVE", "power-loss resume"),
     ("SHAPER_CALIBRATE", "accelerometer"),
     ("SHAPER_CALIBRATE_SCRIPT", "accelerometer"),
-    ("STOP_RESUME", "power-loss resume"),
     ("TEST_RESONANCES", "accelerometer"),
 ];
 
@@ -354,6 +355,7 @@ impl Exec {
             reported: Default::default(),
             tmc,
             sg: Default::default(),
+            bsp: Default::default(),
         }
     }
 
@@ -381,6 +383,7 @@ impl Exec {
     /// `single_command` / `process_command` for one line.
     pub fn single(&mut self, line: &str) {
         let Some(g) = parse::parse(line) else { return };
+        self.bs_publish();
         if let Err(e) = self.dispatch(&g) {
             if self.p.lock().shutdown.is_none() && e.0 != "cancelled" {
                 let msg = format!("error: {}: {e}", g.commandline);
@@ -579,6 +582,13 @@ impl Exec {
             "MOVE_TO_EXTRUDE" => self.cmd_move_to_extrude(g),
             "M729" => self.cmd_m729(),
             "WIPE_NOZZLE" => self.cmd_wipe_nozzle(),
+            // break_save
+            "BREAK_SAVE_STATUS" => Ok(()),
+            "SDCARD_PRINT_FILE_BREAK_SAVE" => {
+                self.from_break();
+                Ok(())
+            }
+            "STOP_RESUME" => self.cmd_stop_resume(g),
             // printer_para
             "ROOT" => {
                 self.is_root = true;
@@ -792,6 +802,7 @@ pub fn run(p: Shared, ctl: Arc<Control>, jobs: Receiver<Job>) {
     p.lock().ui.lock().busy = false;
     // Like the stock UI at boot: apply the saved Z offset (M8233 … P1).
     ex.apply_saved_z_offset();
+    ex.offer_resume();
     while let Some(job) = ex.next_job(true) {
         ex.handle_job(job);
         if p.lock().exit {
@@ -873,6 +884,7 @@ impl Exec {
                 }
             }
             Job::RefreshFiles => refresh_files(&p),
+            Job::DiscardBreakSave => self.discard_break_save(),
         }
         if self.print.resume_requested {
             self.print.resume_requested = false;

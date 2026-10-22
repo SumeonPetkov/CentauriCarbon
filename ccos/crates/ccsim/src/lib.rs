@@ -106,6 +106,7 @@ pub const QUERIES: &[(&str, &str)] = &[
     ("layer", "current layer as ccos counts it (;LAYER: markers)"),
     ("mesh_title, mesh_page, mesh_state, mesh_range", "the bed-mesh screen: profile name, \"n / m\", \"In use\"/\"Not in use\", \"Range … mm\""),
     ("console", "the last 256 lines of ccos's G-code console (use ~ / !~)"),
+    ("break_save, powered", "1 if a power-loss save (break_save0.gcode) exists; 1 while mains is on"),
     ("retransmits, naks", "protocol recoveries so far"),
 ];
 
@@ -115,6 +116,10 @@ pub struct Emu {
     pub sim: Sim,
     pub opts: Options,
     pub gcode_dir: PathBuf,
+    /// What ccos is started with (again after a power cut).
+    hw: Hardware,
+    /// Mains on (false between [`Emu::power_cut`] and [`Emu::power_on`]).
+    pub powered: bool,
 }
 
 impl Emu {
@@ -146,9 +151,40 @@ impl Emu {
             }
             std::fs::write(dir.join("user_printer.cfg"), text)?;
         }
-        let rt = Runtime::start(hw);
+        let rt = Runtime::start(hw.clone());
         rt.state().echo = opts.verbose;
-        Ok(Emu { rt, sim, opts, gcode_dir })
+        Ok(Emu { rt, sim, opts, gcode_dir, hw, powered: true })
+    }
+
+    /// Cut the mains: the power-fail pin goes high and the MCUs lose power.
+    /// The A7 runs on, from its capacitor, until ccos has saved the print
+    /// (or 1.5 s when there is nothing to save); then ccos stops.
+    pub fn power_cut(&mut self) {
+        let save = self.rt.printer.lock().bs.path(0);
+        let stamp = |p: &Option<PathBuf>| p.as_ref().and_then(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+        let before = stamp(&save);
+        self.sim.set_mains(false);
+        let t0 = std::time::Instant::now();
+        while t0.elapsed() < std::time::Duration::from_millis(1500) {
+            let now = stamp(&save);
+            if now.is_some() && now != before {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        self.rt.stop();
+        self.powered = false;
+    }
+
+    /// Mains back: the MCUs power up and a fresh ccos boots.
+    pub fn power_on(&mut self) {
+        if self.powered {
+            return;
+        }
+        self.sim.set_mains(true);
+        self.rt = Runtime::start(self.hw.clone());
+        self.rt.state().echo = self.opts.verbose;
+        self.powered = true;
     }
 
     /// One UI frame.
@@ -287,6 +323,8 @@ impl Emu {
             "mesh_page" => text(ccos::ui::Value::MeshPage),
             "mesh_state" => text(ccos::ui::Value::MeshState),
             "mesh_range" => text(ccos::ui::Value::MeshRange),
+            "break_save" => num(self.rt.printer.lock().bs.path(0).is_some_and(|p| p.exists()) as u8 as f64),
+            "powered" => num(self.powered as u8 as f64),
             _ => None,
         }
     }

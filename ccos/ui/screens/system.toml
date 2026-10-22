@@ -61,31 +61,42 @@ at = [72, 124, 402, 142]
 
 [[widget]]
 type = "label"
-at = [84, 130, 380, 22]
+at = [84, 128, 380, 22]
 value = "version"
 font = "small"
 
 [[widget]]
 type = "label"
-at = [84, 154, 380, 22]
+at = [84, 150, 380, 22]
 value = "memory"
 font = "small"
 
 [[widget]]
 type = "label"
-at = [84, 178, 380, 22]
+at = [84, 172, 380, 22]
 value = "cpu"
 font = "small"
 
 [[widget]]
 type = "label"
-at = [84, 202, 380, 22]
+at = [84, 194, 380, 22]
 value = "uptime"
 font = "small"
 
+# the stock settings' "resume print after power loss" switch
+# (sysconf power_off_resume_print)
+[[widget]]
+type = "toggle"
+at = [84, 220, 378, 40]
+text = "Resume after power loss"
+on_if = "power_resume"
+bg = "pressed"
+tap = "toggle_power_resume"
+
 [[widget]]
 type = "label"
-at = [84, 226, 380, 34]
-text = "Edit ccos/ui/*.toml and rebuild to change any screen."
+at = [380, 229, 70, 22]
+value = "power_resume_state"
 font = "small"
-color = "dim"
+align = "right"
+bg = "none"

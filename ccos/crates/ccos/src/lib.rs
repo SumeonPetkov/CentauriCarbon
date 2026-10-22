@@ -4,6 +4,7 @@
 //! G-code thread (`gcode`). Talks to real hardware or to `ccsim` (`hw`).
 
 pub mod app;
+pub mod breaksave;
 pub mod clock;
 pub mod config;
 pub mod core;

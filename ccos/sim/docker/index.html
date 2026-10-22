@@ -39,6 +39,7 @@
   <button id="plus" title="Bigger">+</button>
   <button id="real" title="One emulator pixel per screen pixel">Actual size</button>
   <button id="fit" title="As big as the browser window, above the panels">Fit</button>
+  <button id="power" title="Cut the mains: ccos saves a running print and stops; power on again to get the resume prompt">Power cut</button>
 </div>
 <iframe id="vnc" src="vnc.html?autoconnect=true&amp;resize=scale&amp;reconnect=true&amp;show_dot=true"></iframe>
 <div id="tools">
@@ -97,6 +98,17 @@
     if (!r.ok) throw new Error(t.trim() || r.statusText);
     return t;
   };
+  // mains switch (power-loss resume)
+  const power = document.getElementById("power");
+  let powered = true;
+  const showPower = () => { power.textContent = powered ? "Power cut" : "Power on"; power.classList.toggle("on", !powered); };
+  power.onclick = async () => {
+    power.disabled = true;
+    try { await call("POST", "/power?on=" + (powered ? 0 : 1)); powered = !powered; showPower(); } catch (e) {}
+    power.disabled = false;
+  };
+  call("GET", "/power").then(t => { powered = t.trim() === "1"; showPower(); }).catch(() => {});
+
   const msg = document.getElementById("msg");
   const say = (t, err) => { msg.textContent = t; msg.className = err ? "err" : ""; };
 

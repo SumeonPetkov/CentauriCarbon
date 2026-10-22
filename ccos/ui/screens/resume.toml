@@ -1,0 +1,44 @@
+# The stock boot prompt after a power loss (app_top.cpp, CHECK_BREAK_SAVE):
+# "Kind Reminder", Cancel / Resume. src/runtime.rs shows it when the G-code
+# thread finds a power-loss save at boot (src/gcode/breaksave.rs). Resume
+# prints the saved file again, which continues it; Cancel deletes the save.
+
+[[widget]]
+type = "panel"
+at = [40, 26, 400, 220]
+
+[[widget]]
+type = "label"
+at = [56, 40, 368, 26]
+text = "Kind Reminder"
+font = "bold"
+color = "accent"
+align = "center"
+
+[[widget]]
+type = "label"
+at = [56, 76, 368, 66]
+text = 'Uncompleted print job detected, click "Resume" to continue printing.'
+align = "center"
+
+[[widget]]
+type = "label"
+at = [56, 146, 368, 22]
+value = "resume_file"
+font = "small"
+color = "dim"
+align = "center"
+
+[[widget]]
+type = "button"
+at = [56, 182, 176, 50]
+text = "Cancel"
+bg = "pressed"
+tap = "resume_cancel"
+
+[[widget]]
+type = "button"
+at = [248, 182, 176, 50]
+text = "Resume"
+bg = "accent"
+tap = "resume_print"

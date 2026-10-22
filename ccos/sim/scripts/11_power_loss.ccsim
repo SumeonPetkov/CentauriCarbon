@@ -1,0 +1,65 @@
+# Power-loss resume (stock break_save): mains lost mid-print, the A7 saves
+# the print from its capacitor; at the next boot the "Kind Reminder" prompt
+# offers to resume. Resume reprints the same file from the saved line:
+# lift Z, home X/Y, purge at the pause position, back down, go on.
+option speed 3
+wait_until links == 3 timeout 20
+print cube_20mm.gcode
+wait_until print_state == "Printing" timeout 5
+wait_until layer >= 3 timeout 300
+power_cut
+expect powered == 0
+expect break_save == 1
+expect console ~ "power outages detected."
+expect console ~ "break_save write finish"
+show layers max_z
+power_on
+wait_until links == 3 timeout 30
+wait_until screen == "resume" timeout 10
+wait 0.3
+screenshot shots/resume_prompt.png
+tap "Resume"
+wait_until print_state == "Printing" timeout 10
+wait_until console ~ "STOP_RESUME" timeout 30
+# any print start deletes the save (once the resume moves are done)
+wait_until break_save == 0 timeout 120
+expect print_state == "Printing"
+wait_until print_state == "Finished" timeout 600
+expect layer == 5
+show layers extruded layer_heights
+# the purge at the pause position (202, 264.5) runs ~20 mm up: STOP_RESUME
+# lifts 10 mm, then G28's Z_AXIS_OFF_LIMIT_ACTION queries the Z endstop
+# before that lift has run and adds its own 10 mm (as on the printer)
+expect max_z > 20.3
+expect max_z < 20.4
+expect bbox_x1 > 201.9
+expect bbox_y1 > 264.4
+# the part goes on from the saved line. How high depends on what the MCU
+# had not yet run when power went (the save keeps the stepper's commanded
+# position, as stock does), so only roughly
+expect layers >= 5
+expect cold_extrusion == 0
+expect mcu_shutdown == "none"
+expect shutdown == "none"
+bedshot shots/power_loss_bed.png
+
+# again, but cancel at the prompt: the save is deleted
+print cube_20mm.gcode
+wait_until print_state == "Printing" timeout 5
+wait_until layer >= 2 timeout 300
+power_cut
+expect break_save == 1
+power_on
+wait_until links == 3 timeout 30
+wait_until screen == "resume" timeout 10
+tap "Cancel"
+wait 0.5
+expect screen == "home"
+expect break_save == 0
+
+# no print running: an outage saves nothing
+power_cut
+expect break_save == 0
+power_on
+wait_until links == 3 timeout 30
+expect screen == "home"

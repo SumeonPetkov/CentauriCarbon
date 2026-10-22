@@ -68,6 +68,11 @@ fn bed_mesh() {
     run("10_bed_mesh.ccsim");
 }
 
+#[test]
+fn power_loss_resume() {
+    run("11_power_loss.ccsim");
+}
+
 /// Every script file has a test above.
 #[test]
 fn all_scripts_listed() {

@@ -10,6 +10,8 @@
 //! gpio/export
 //! gpio/gpio140/{direction,value} (PE12, toolhead power)
 //! gpio/gpio201/{direction,value} (PG9, load-cell board power)
+//! gpio/gpio192/{direction,value} (PG0, mains lost: 1 while the power is cut)
+//! gpio/gpio203, gpio/gpio65      (PG11, PC1: the backup capacitor's switches)
 //! ```
 
 use std::io;
@@ -57,6 +59,8 @@ pub struct Printer {
     t0: Instant,
     /// Index into `world.log` already printed (verbose mode).
     printed: usize,
+    /// Mains power is on (see [`Sim::set_mains`]).
+    pub mains: bool,
 }
 
 impl Printer {
@@ -128,6 +132,9 @@ struct Wire {
 /// sysfs GPIO number → board it powers.
 const POWER: [(u32, McuKind); 2] = [(4 * 32 + 12, McuKind::Toolhead), (6 * 32 + 9, McuKind::LoadCell)];
 
+/// PG0: the A7's power-fail input (high = mains lost).
+pub const POWER_FAIL_GPIO: u32 = 6 * 32;
+
 pub struct Sim {
     pub printer: Arc<Mutex<Printer>>,
     pub paths: SimPaths,
@@ -156,6 +163,12 @@ impl Sim {
             std::fs::write(g.join("direction"), "out\n")?;
             std::fs::write(g.join("value"), "1\n")?;
         }
+        for (n, dir) in [(POWER_FAIL_GPIO, "in"), (203, "out"), (65, "out")] {
+            let g = paths.gpio_root.join(format!("gpio{n}"));
+            std::fs::create_dir_all(&g)?;
+            std::fs::write(g.join("direction"), format!("{dir}\n"))?;
+            std::fs::write(g.join("value"), "0\n")?;
+        }
         let wires = [
             Wire { pty: open_pty(&paths.dsp)?, bytes_per_s: f64::INFINITY, credit: 0.0 },
             Wire { pty: open_pty(&paths.toolhead)?, bytes_per_s: 1_000_000.0 / 10.0, credit: 0.0 },
@@ -170,7 +183,7 @@ impl Sim {
                 m.set_power(true, 0.0, &mut world);
             }
         }
-        let printer = Arc::new(Mutex::new(Printer { world, mcus, t0, printed: 0 }));
+        let printer = Arc::new(Mutex::new(Printer { world, mcus, t0, printed: 0, mains: true }));
         let stop = Arc::new(AtomicBool::new(false));
         let (p2, s2, gpio, c2) = (printer.clone(), stop.clone(), paths.gpio_root.clone(), cfg.clone());
         let thread = std::thread::Builder::new().name("ccsim".into()).spawn(move || run(p2, s2, wires, gpio, c2))?;
@@ -179,6 +192,22 @@ impl Sim {
 
     pub fn lock(&self) -> MutexGuard<'_, Printer> {
         self.printer.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Cut or restore mains power: the power-fail pin follows at once and
+    /// every MCU loses (or gets) power. Motors stop where they are; heaters
+    /// go cold; what was printed stays on the bed. The STM32 boards come
+    /// back in their bootloader, as after any power-on.
+    pub fn set_mains(&self, on: bool) {
+        let pin = self.paths.gpio_root.join(format!("gpio{POWER_FAIL_GPIO}/value"));
+        let _ = std::fs::write(pin, if on { "0\n" } else { "1\n" });
+        let mut p = self.lock();
+        p.mains = on;
+        let t = p.now();
+        let Printer { world, mcus, .. } = &mut *p;
+        for m in mcus.iter_mut() {
+            m.set_power(on, t, world);
+        }
     }
 
     /// Environment that points `ccos` at this simulation.
@@ -229,6 +258,7 @@ fn run(printer: Arc<Mutex<Printer>>, stop: Arc<AtomicBool>, mut wires: [Wire; 3]
         let t = p.now();
         let dt = t - last_t;
         last_t = t;
+        let mains = p.mains;
         let Printer { world, mcus, .. } = &mut *p;
 
         if t >= gpio_at {
@@ -237,7 +267,10 @@ fn run(printer: Arc<Mutex<Printer>>, stop: Arc<AtomicBool>, mut wires: [Wire; 3]
                 if let Some(on) = read_power(&gpio, *n) {
                     if on != power[i] {
                         power[i] = on;
-                        mcus[*k as usize].set_power(on, t, world);
+                        // without mains the board stays off
+                        if mains || !on {
+                            mcus[*k as usize].set_power(on, t, world);
+                        }
                     }
                 }
             }

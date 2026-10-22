@@ -84,6 +84,10 @@ pub struct State {
     pub mesh_active: Option<String>,
     /// The mesh shown on the bed-mesh screen.
     pub mesh_sel: usize,
+    /// A power-loss save was found at boot: the file it would resume.
+    pub resume_offer: Option<String>,
+    /// sysconf `power_off_resume_print`.
+    pub power_resume: bool,
 }
 
 impl Default for State {
@@ -115,6 +119,8 @@ impl Default for State {
             meshes: Vec::new(),
             mesh_active: None,
             mesh_sel: 0,
+            resume_offer: None,
+            power_resume: false,
         }
     }
 }
@@ -324,6 +330,12 @@ BED_MESH_CALIBRATE S75 pla"),
                     out.push_str(if self.flag(Flag::MeshInUse) { "In use" } else { "Not in use" });
                 }
             }
+            Value::ResumeFile => {
+                if let Some(f) = &self.resume_offer {
+                    out.push_str(f.rsplit('/').next().unwrap_or(f));
+                }
+            }
+            Value::PowerResumeState => out.push_str(if self.power_resume { "On" } else { "Off" }),
             Value::MeshHigh | Value::MeshLow | Value::MeshRange | Value::MeshMean => {
                 if let Some(m) = self.shown_mesh().filter(|m| !m.points.is_empty()) {
                     let (lo, hi, mean) = mesh_stats(m);
@@ -375,6 +387,7 @@ BED_MESH_CALIBRATE S75 pla"),
             Flag::Shutdown => self.shutdown.is_some(),
             Flag::HasMesh => !self.meshes.is_empty(),
             Flag::MeshMany => self.meshes.len() > 1,
+            Flag::PowerResume => self.power_resume,
             Flag::MeshInUse => self.shown_mesh().is_some_and(|m| self.mesh_active.as_deref() == Some(m.section.as_str())),
         }
     }

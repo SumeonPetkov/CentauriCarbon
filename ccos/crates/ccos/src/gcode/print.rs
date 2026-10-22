@@ -29,33 +29,39 @@ pub struct ChangeFilament {
 #[derive(Default)]
 pub struct PrintState {
     // virtual_sdcard
-    reader: Option<BufReader<File>>,
-    next_line: Option<String>,
-    path: Option<PathBuf>,
-    size: u64,
-    position: u64,
-    fileslice: i64,
+    pub(super) reader: Option<BufReader<File>>,
+    pub(super) next_line: Option<String>,
+    pub(super) path: Option<PathBuf>,
+    pub(super) size: u64,
+    pub(super) position: u64,
+    /// Start of the line being executed (`m_file_position` while it runs).
+    pub(super) line_start: u64,
+    pub(super) fileslice: i64,
     /// The work loop should run (`is_active`).
     pub active: bool,
-    must_pause: bool,
-    custom_zero: bool,
-    cancelled: bool,
+    pub(super) must_pause: bool,
+    pub(super) custom_zero: bool,
+    pub(super) cancelled: bool,
     pub resume_requested: bool,
     // pause_resume
-    is_paused: bool,
-    pause_command_sent: bool,
-    sd_paused: bool,
-    save_extruder_temp: f64,
-    save_bed_temp: f64,
-    save_fans: [f64; 2],
-    last_pause: f64,
-    last_pause_tick: f64,
-    ext_timeout_done: bool,
-    fan_timeout_done: bool,
+    pub(super) is_paused: bool,
+    pub(super) pause_command_sent: bool,
+    pub(super) sd_paused: bool,
+    pub(super) save_extruder_temp: f64,
+    pub(super) save_bed_temp: f64,
+    pub(super) save_fans: [f64; 2],
+    pub(super) last_pause: f64,
+    pub(super) last_pause_tick: f64,
+    pub(super) ext_timeout_done: bool,
+    pub(super) fan_timeout_done: bool,
     // print_stats
-    phase: Phase,
-    print_start: Option<Instant>,
-    last_print_time: f64,
+    pub(super) phase: Phase,
+    pub(super) print_start: Option<Instant>,
+    pub(super) last_print_time: f64,
+    /// A resumed print runs at half speed for 3 minutes
+    /// (`m_break_save_files_status` and the print screen's `start_tick`).
+    pub(super) files_status: bool,
+    pub(super) slow_since: Option<f64>,
     pub current_layer: u32,
     pub total_layers: u32,
     // LEDs (colour set without TRANSMIT)
@@ -132,6 +138,7 @@ impl Exec {
         }
         self.print.path = None;
         self.print.position = 0;
+        self.print.line_start = 0;
         self.print.size = 0;
         self.print.current_layer = 0;
         self.print.total_layers = 0;
@@ -182,6 +189,20 @@ impl Exec {
         self.print.print_start = Some(Instant::now());
         self.core().busy_printing = true;
         self.core().ui.set_status(format!("Printing {}", self.print.path.as_ref().unwrap().file_name().unwrap_or_default().to_string_lossy()));
+        self.bs_start(&filename);
+        // the same file as the power-loss save: resume it
+        self.load_variables();
+        if self.bsp.vsd_file_path.as_deref() == Some(filename.as_str()) {
+            self.core().bs.reserve = true;
+            // the print screen is already up (as on the printer)
+            self.set_phase(Phase::Printing);
+            super::console("");
+            super::console(&format!("cmd_SDCARD_PRINT_FILE_from_break :{filename}"));
+            super::console("");
+            self.from_break();
+        }
+        self.core().bs.delete_save_files();
+        self.core().bs.reserve = false;
         // do_resume
         self.print.must_pause = false;
         self.print.active = true;
@@ -222,15 +243,28 @@ impl Exec {
             if !self.print.active || self.print.must_pause {
                 break;
             }
-            if self.p.lock().shutdown.is_some() {
-                self.do_pause();
-                break;
+            {
+                let mut c = self.p.lock();
+                if c.shutdown.is_some() || c.exit {
+                    drop(c);
+                    self.do_pause();
+                    break;
+                }
+                // mains lost: the watcher saves; stop reading G-code
+                if std::mem::take(&mut c.bs.power_pause) {
+                    drop(c);
+                    self.print.sd_paused = true;
+                    self.do_pause();
+                    break;
+                }
             }
+            self.slow_start_check();
             let Some(raw) = self.read_line() else {
                 self.print.close();
                 self.respond("Done printing file");
                 break;
             };
+            self.print.line_start = self.print.position;
             self.print.position += raw.len() as u64;
             let raw = raw.strip_suffix('\n').unwrap_or(&raw).to_string();
             let next = self.peek_line();
@@ -244,6 +278,7 @@ impl Exec {
                 self.single(&line);
             }
             self.from_file = false;
+            self.print.line_start = self.print.position;
             if now() - published > 0.5 {
                 published = now();
                 self.publish_print();
@@ -254,6 +289,10 @@ impl Exec {
             self.print.active = false;
             self.print.custom_zero = false;
             self.core().busy_printing = false;
+            // the print screen closes: back to full speed if still slowed
+            if self.print.files_status {
+                self.slow_start_end();
+            }
             if !self.print.cancelled {
                 let _ = self.wait_moves();
                 self.print.position = self.print.size;
@@ -413,7 +452,14 @@ impl Exec {
         self.set_fan(FAN_MODEL, fans[0]);
         self.set_fan(FAN_HELPER, fans[1]);
         let _ = self.wait_moves();
-        // send_resume_command
+        self.send_resume_command();
+        self.print.is_paused = false;
+        self.set_phase(Phase::Printing);
+        Ok(())
+    }
+
+    /// `send_resume_command`.
+    pub(super) fn send_resume_command(&mut self) {
         if self.print.sd_paused {
             self.print.sd_paused = false;
             self.print.must_pause = false;
@@ -423,9 +469,6 @@ impl Exec {
             self.respond("action:resumed");
         }
         self.print.pause_command_sent = false;
-        self.print.is_paused = false;
-        self.set_phase(Phase::Printing);
-        Ok(())
     }
 
     fn cancel_common(&mut self) {

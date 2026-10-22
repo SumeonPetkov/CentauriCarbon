@@ -37,6 +37,10 @@ such port.
 A full 11×11 bed mesh takes about 6 minutes of probing; then look at
 Control → Bed mesh.
 
+**Power cut** (top bar) cuts the mains. During a print, ccos saves where it
+was and stops. **Power on** boots it again, and the screen asks whether to
+resume the print. The switch is System → "Resume after power loss".
+
 ## Watching a test script
 
 ```sh

@@ -114,6 +114,16 @@ cover. The toolhead link is throttled to 100 kB/s and the load-cell board to
 `hotend_thermistor_loose`, `toolhead_unplugged`, `x_diag_dead`; and
 `--corrupt <p>` flips bits in bytes the host sends.
 
+**Power cuts** (`Emu::power_cut` / `power_on`; script `power_cut`,
+`power_on`):
+- A cut raises the A7's power-fail pin (gpio192) and takes power from the
+  three MCUs. Motors stop where they are, heaters go cold, and what was
+  printed stays on the bed.
+- ccos runs on until it has written its power-loss save (at most 1.5 s),
+  then stops, as the A7 does when its capacitor runs out.
+- Power on brings the MCUs back in their bootloaders and boots a fresh
+  ccos.
+
 ## ccos changes that made this possible
 
 The emulator needed — and drove — the printing core:
@@ -160,6 +170,9 @@ in the emulator's interactive mode:
 - `GET /files` lists the G-code files.
 - `POST /upload|print|delete?name=` manage files. A print starts the way the
   Print screen starts one, and is refused while a print runs.
+- `GET /power` and `POST /power?on=0|1` cut or restore mains (the page's
+  **Power cut / Power on** button). G-code and prints are refused while
+  the printer is off.
 
 It is emulator-only and needs no changes to ccos.
 
@@ -178,6 +191,7 @@ It is emulator-only and needs no changes to ccos.
 | `08_loadcell` | `STRAINGAUGE_Z_HOME` (tare flags 0x8B, Z0 with the bed pressed ~0.1 mm), `STRAINGAUGE_TEST` back where it started, `DIRZCTL` moves Z without changing ccos's position, `READ_HX711` returns |
 | `09_loadcell_home` | G28 with `option config strain_gauge enable_z_home 1`: Z homed on the load cells, Z10 is 5.65 mm above the bed |
 | `10_bed_mesh` | a tilted, domed bed (`option bed_shape`) on a 3×3 grid: bad `BED_MESH_CALIBRATE` words refused before moving; the stock calibration saved as `default` and in use; Z1 at the same gap at five places; `BED_MESH_CALIBRATE S60 pla` heats first and saves `pla`; the Bed mesh screen and its arrows; `BED_MESH_CLEAR` shows the slope again; `G29 S65` |
+| `11_power_loss` | a power cut at layer 3: the save is written; at power on the "Kind Reminder" prompt; Resume: STOP_RESUME's lift, X/Y homing and purge at the pause position (~20 mm up, as stock), the save deleted, the cube finished; again with Cancel: the save deleted; a cut with no print saves nothing |
 | `06_gcode_parity` | stock parser/console behaviour (unknown commands, M21 silent, range error text, upper-casing), M106 P/S rules, SET_LED TRANSMIT, SET_PRESSURE_ADVANCE/M900 and `kin_flush_delay`, SET_INPUT_SHAPER (SHAPER_TYPE_X ignored as in the stock code), the ROOT gate in a file, PAUSE/RESUME/CANCEL_PRINT during a print |
 
 Example:

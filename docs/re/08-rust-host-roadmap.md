@@ -120,8 +120,10 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
    loads, and the same defaults, range checks and internal scripts (G28,
    PAUSE/RESUME, M600, PID_CALIBRATE…). It also covers the file pipeline,
    the ROOT gate and M8000–M8826 on the stock config files. Coverage and
-   deliberate differences: [10](10-gcode.md). Commands whose subsystem
-   (items 6–8, power-loss resume `break_save`) is missing are accepted and
+   deliberate differences: [10](10-gcode.md). Power-loss resume
+   (`break_save`: watcher, save file, boot prompt, `STOP_RESUME`) is
+   ported; tested in the emulator (`11_power_loss`), not yet on a printer.
+   Commands whose subsystem (items 6–8) is missing are accepted and
    reported as such.
 10. **Network** — Moonraker-compatible HTTP/websocket API (works with
     OrcaSlicer, Mainsail, Fluidd) and/or SDCP (websocket on :3030, UDP
