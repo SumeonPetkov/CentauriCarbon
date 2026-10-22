@@ -3,6 +3,7 @@
 //! Threads: the UI (`runtime`), the printer core I/O loop (`core`), and the
 //! G-code thread (`gcode`). Talks to real hardware or to `ccsim` (`hw`).
 
+pub mod accel;
 pub mod app;
 pub mod breaksave;
 pub mod clock;
@@ -13,6 +14,7 @@ pub mod heater;
 pub mod hw;
 pub mod loadcell;
 pub mod mesh;
+pub mod resonance;
 pub mod machine;
 pub mod mcu;
 pub mod motion;

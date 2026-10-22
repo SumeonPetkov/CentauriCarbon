@@ -47,6 +47,8 @@ pub struct Options {
     pub config: Vec<(String, String, String)>,
     /// `WorldConfig::bed_shape` (tilt X, tilt Y, dome; mm).
     pub bed_shape: [f64; 3],
+    /// `WorldConfig::resonance` (X Hz, Y Hz, X damping, Y damping).
+    pub resonance: [f64; 4],
 }
 
 impl Default for Options {
@@ -61,6 +63,7 @@ impl Default for Options {
             out_dir: PathBuf::from("."),
             config: Vec::new(),
             bed_shape: [0.0; 3],
+            resonance: WorldConfig::default().resonance,
         }
     }
 }
@@ -93,6 +96,8 @@ pub const QUERIES: &[(&str, &str)] = &[
     ("push_x, push_y, push_z", "deepest push past a frame limit / into the bed (mm; the bed gives 0.5 mm on its load cells)"),
     ("sg_reports, sg_calibration", "load-cell reports ccos received / the last tare result (0x80 = tared, low bits = cells that read bad)"),
     ("lost_steps", "steps sent to disabled drivers"),
+    ("accel_samples", "samples the toolhead accelerometer has taken"),
+    ("tmp_files", "files ccos wrote to its /tmp folder (accelerometer CSVs), space-separated"),
     ("tmc_<x|y|z|e>_<reg>", "TMC2209 register (gconf, gstat, ifcnt, slaveconf, ihold_irun, tpowerdown, tpwmthrs, tcoolthrs, sgthrs, chopconf, pwmconf), microsteps, writes"),
     ("pressure_advance, smooth_time, kin_flush_delay", "ccos's extruder settings (s for the times)"),
     ("shaper_type_<x|y>, shaper_freq_<x|y>, damping_<x|y>", "ccos's input shaper (type as its name)"),
@@ -127,7 +132,7 @@ impl Emu {
         std::fs::create_dir_all(&opts.dir)?;
         let sim = Sim::start(SimConfig {
             dir: opts.dir.clone(),
-            world: WorldConfig { thermal_speed: opts.speed, bed_shape: opts.bed_shape, ..WorldConfig::default() },
+            world: WorldConfig { thermal_speed: opts.speed, bed_shape: opts.bed_shape, resonance: opts.resonance, ..WorldConfig::default() },
             mcus_running: !opts.bootloader,
             corrupt_rate: opts.corrupt,
             verbose: opts.verbose,
@@ -251,6 +256,7 @@ impl Emu {
                 "push_y" => num(w.push_mm[1]),
                 "push_z" => num(w.push_mm[2]),
                 "lost_steps" => num(w.motors.iter().map(|m| m.lost_steps).sum::<u64>() as f64),
+                "accel_samples" => num(w.accel.samples as f64),
                 "light" => num(w.duty(Role2::Light)),
                 "part_fan" => num(w.duty(Role2::PartFan)),
                 "hotend_fan" => num(w.duty(Role2::HotendFan)),
@@ -325,6 +331,11 @@ impl Emu {
             "mesh_range" => text(ccos::ui::Value::MeshRange),
             "break_save" => num(self.rt.printer.lock().bs.path(0).is_some_and(|p| p.exists()) as u8 as f64),
             "powered" => num(self.powered as u8 as f64),
+            "tmp_files" => {
+                let mut names: Vec<String> = std::fs::read_dir(&self.hw.tmp_dir).map_or_else(|_| Vec::new(), |d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect());
+                names.sort();
+                Some(Val::Str(names.join(" ")))
+            }
             _ => None,
         }
     }

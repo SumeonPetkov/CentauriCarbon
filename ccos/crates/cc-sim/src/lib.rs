@@ -4,12 +4,15 @@
 //!   printer's exact protocol with the firmware's timing rules and shutdowns.
 //! * [`world`]: the machine they drive — CoreXY carriage, Z, extruder,
 //!   heaters, thermistors, fans, light, stall/endstop inputs, print record.
+//! * [`accel`]: the toolhead's LIS2DW12 accelerometer and the toolhead's
+//!   motion on its belts (the resonance shaper calibration measures).
 //! * [`tmc`]: the four TMC2209 drivers on the MCUs' UARTs (microstepping and
 //!   StallGuard depend on what the host configures).
 //! * [`sim`]: runs it in real time on pseudo-terminals with a fake sysfs GPIO
 //!   tree, so an unmodified host (ccos, or anything that opens a serial port)
 //!   can connect.
 
+pub mod accel;
 pub mod hx711s;
 pub mod mcu;
 pub mod sim;

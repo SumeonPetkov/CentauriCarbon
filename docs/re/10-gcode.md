@@ -69,6 +69,8 @@ Exactly `gcode.cpp`:
 | TMC2209 | SET_TMC_CURRENT_stepper_x/_y/_z/_extruder INIT_TMC SET_TMC_FIELD DUMP_TMC |
 | Extruder | SET_PRESSURE_ADVANCE M900 SET_EXTRUDER_STEP_DISTANCE SET_MIN_EXTRUDE_TEMP FLOW_CALIBRATION ACTIVATE_EXTRUDER RESET_EXTRUDER |
 | Input shaper | SET_INPUT_SHAPER M593 |
+| Accelerometer | ACCELEROMETER_MEASURE_X ACCELEROMETER_QUERY_X ADXL345_DEBUG_READ_X ADXL345_DEBUG_WRITE_X |
+| Resonance test | TEST_RESONANCES SHAPER_CALIBRATE SHAPER_CALIBRATE_SCRIPT MEASURE_AXES_NOISE |
 | Heaters | M104 M109 M140 M190 M105 SET_HEATER_TEMPERATURE TEMPERATURE_WAIT TURN_OFF_HEATERS M301 M130 M131 M132 PID_CALIBRATE PID_CALIBRATE_ALL PID_CALIBRATE_HOTBED PID_CALIBRATE_NOZZLE |
 | Fans, LEDs | M106 M107 SET_FAN_SPEED SET_LED_led1 SET_LED_led2 |
 | Print job | SDCARD_PRINT_FILE SDCARD_RESET_FILE SET_PRINT_STATS_INFO M117 PAUSE RESUME CLEAR_PAUSE CANCEL_PRINT STOP_PRINT M75 M76 M77 M601 M602 M603 |
@@ -77,13 +79,10 @@ Exactly `gcode.cpp`:
 | Bed mesh | G29 G29.1 BED_MESH_CALIBRATE BED_MESH_SET_INDEX BED_MESH_OUTPUT BED_MESH_MAP BED_MESH_OFFSET BED_MESH_APPLICATIONS BED_MESH_CLEAR |
 | System | ROOT UNROOT M8000–M8826 (all 165), SET_IDLE_TIMEOUT UPDATE_IDLE_TIMER M112 RESTART FIRMWARE_RESTART ECHO STATUS HELP G M M110 M115 |
 
-**Phase 2**: these exist on the printer, but ccos does not yet have the
-subsystem behind them. They are accepted, do nothing, and log
-`<CMD>: not available in ccos yet (needs …)` the first time they are used.
-
-| Subsystem | Commands |
-|---|---|
-| Accelerometer | SHAPER_CALIBRATE SHAPER_CALIBRATE_SCRIPT TEST_RESONANCES MEASURE_AXES_NOISE ACCELEROMETER_MEASURE_X ACCELEROMETER_QUERY_X ADXL345_DEBUG_READ_X ADXL345_DEBUG_WRITE_X |
+Every command the stock firmware registers on the Centauri Carbon is
+implemented. (The `NOT_YET` list in `gcode/mod.rs`, which answered
+`<CMD>: not available in ccos yet (needs …)` while subsystems were
+missing, is empty.)
 
 **Not on the Centauri Carbon.** Their klippy modules exist in the source
 but are not loaded by the stock `printer.cfg`, so the printer answers
@@ -386,6 +385,55 @@ BED_MESH_PROFILE.
   scripts from `pause_resume.cpp` and `change_filament.cpp` word for word.
   Five minutes after a pause, the nozzle is cooled to
   min(saved target, 45 °C) and the part fan is turned off.
+- **Accelerometer** (`adx_lis2dw12.cpp`, `src/accel.rs`,
+  `src/gcode/accel.rs`).
+  - `[adxl345 X]` is a LIS2DW12 on the toolhead MCU's SPI1 (CS PA4,
+    5 MHz, mode 3), read by the MCU's `lis2dw` task, which sends 8
+    samples per `lis2dw_data`. The chip always runs at 1600 Hz, ±16 g;
+    `RATE` only sets how often the MCU polls (every 4 samples).
+  - The commands are mux commands in stock, but its
+    `register_mux_command` ignores the key, so only the `_X` names exist
+    and `CHIP=` is not read.
+  - Sample times are spread evenly between the host's clock at the start
+    and stop requests. The chip starts at the next move time, so a short
+    measurement reads a lower sample rate than 1600 Hz (about 1350 Hz for
+    1.5 s); a 70 s test is off by well under 1 %.
+  - `ACCELEROMETER_MEASURE_X` starts, and stops on the second call. It
+    writes `/tmp/adxl345-adxl345 X-<NAME>.csv` (the sample index as the
+    time column, as stock). Only the first 10 s are kept.
+  - `ACCELEROMETER_QUERY_X` prints the last sample:
+    `adxl345 values (x, y, z)` in mm/s². At rest z is about +9807
+    (`axes_map: x,z,-y`).
+  - Nothing else is printed to the console: stock's replies are
+    commented out.
+- **Resonance test** (`resonance_tester.cpp`, `shaper_calibrate.cpp`,
+  `src/resonance.rs`, `src/gcode/resonance.rs`). Elegoo's pulse test, not
+  Klipper's sweep:
+  - At each frequency the toolhead moves out a quarter period and back at
+    `accel_per_hz` × frequency (`M204` per step), from `min_freq` (5) to
+    `max_freq` (75) at `hz_per_sec` (1): about 70 s per axis at
+    (128, 128, 5).
+  - Input shaping is off during the test unless `INPUT_SHAPING=1`.
+  - `SET_VELOCITY_LIMIT … FORCE=1` raises the acceleration limit. Afterwards
+    the limit is set to the acceleration that was in use, not to the old
+    limit.
+  - The measurement stops when the last pulse is queued, so the last
+    ~2 s of pulses (the buffered moves) are not sampled.
+  - `HZ_PER_SEC` given once stays in effect for later tests.
+  - The fit is Klipper's with Elegoo's changes: only `mzv` (23–150 Hz),
+    target acceleration 10000, a direct DFT with π = 3.141592653. The
+    division by frequency (`normalize_to_frequencies`) is applied to
+    copies that are never used.
+  - `SHAPER_CALIBRATE` saves `shaper_type_<axis>`/`shaper_freq_<axis>` in
+    printer.cfg and user_printer.cfg. It then runs
+    `SET_INPUT_SHAPER SHAPER_TYPE_X=mzv SHAPER_FREQ_X=…`, which ignores
+    the type: the new frequency is live at once, a changed type only
+    after a restart.
+  - `TEST_RESONANCES` writes no file (stock's CSV code is commented out).
+    `AXIS` is not lower-cased (a no-op loop in stock).
+  - `MEASURE_AXES_NOISE` reads about 1 s for the default `MEAS_TIME=3`:
+    the dwell ends once the planner is down to 2 s ahead.
+  - `SHAPER_CALIBRATE_SCRIPT` runs `MEASURE_AXES_NOISE`, `G28`, then X and Y.
 - **Power-loss resume** (`break_save.cpp`, `src/breaksave.rs`,
   `src/gcode/breaksave.rs`).
   - A thread polls GPIOG(0) (gpio192, high = mains lost) every
@@ -506,6 +554,14 @@ here; the additions only give meaning to lines the stock firmware ignores.
 | Resume `set_position` | given X, Y, Z only; the toolhead reads E past the end | E keeps its current value | undefined behaviour |
 | After a power-loss save | `while(1){}` until the capacitor runs out | the watcher thread ends | undefined behaviour |
 | Power-loss save path | `/board-resource/` | the config folder (`<sim dir>/board-resource` in the emulator) | same folder on the printer |
+| `ACCELEROMETER_MEASURE` stop | writes the CSV from a sample count that was never set | decodes, then writes | undefined behaviour |
+| `ACCELEROMETER_QUERY` when the chip doesn't answer | reads a null buffer | an error | undefined behaviour |
+| `TEST_RESONANCES` without `AXIS`, or an `AXIS` that is neither x/y nor two numbers | null pointer / reads past the list | an error (`missing AXIS`, `Invalid format of axis`) | undefined behaviour |
+| `accel_chip` that names no `[adxl345 …]` | null pointer | an error | undefined behaviour |
+| A test too short for one 1024-sample window | null pointer | `axis acceleromter measured no data` as an error | undefined behaviour |
+| `save_params` | `std::string` passed to `%s` | the shaper name | undefined behaviour |
+| Accelerometer CSV folder | `/tmp` | `/tmp` (`<sim dir>/tmp` in the emulator, or `CCOS_TMP_DIR`) | same on the printer |
+| Accelerometer register read-back after a timed write | waits behind the write (same SPI command queue) | waits for the held write to go out | same |
 
 ## Tests
 
@@ -533,3 +589,7 @@ here; the additions only give meaning to lines the stock firmware ignores.
   - `11_power_loss` cuts the power mid-print, then checks the save file,
     the boot prompt, `STOP_RESUME`, the finished part and the Cancel
     path.
+  - `13_resonance` reads the accelerometer at rest, writes a measurement
+    CSV, measures the noise, and runs `SHAPER_CALIBRATE` on a toolhead
+    that rings at X 62 Hz / Y 38 Hz: the fit lands at 63.6 / 38.4 Hz.
+    It also runs a diagonal `TEST_RESONANCES`.

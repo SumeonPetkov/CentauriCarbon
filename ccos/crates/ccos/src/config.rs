@@ -125,6 +125,11 @@ impl Config {
         self.sections.iter_mut().find(|s| s.name == name)
     }
 
+    /// Section names in file order.
+    pub fn section_names(&self) -> Vec<String> {
+        self.sections.iter().map(|s| s.name.clone()).collect()
+    }
+
     pub fn has_section(&self, name: &str) -> bool {
         self.section(name).is_some()
     }

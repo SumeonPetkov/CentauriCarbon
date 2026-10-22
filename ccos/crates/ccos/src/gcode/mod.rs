@@ -17,6 +17,7 @@
 
 pub mod parse;
 
+mod accel;
 mod bedcheck;
 mod breaksave;
 mod cmds;
@@ -26,6 +27,7 @@ mod mesh;
 mod para;
 mod print;
 mod probe;
+mod resonance;
 mod tmc;
 
 use std::collections::HashMap;
@@ -147,6 +149,10 @@ pub struct Exec {
     sg: loadcell::SgVals,
     /// `[probe]` results (`PROBE`, `PROBE_CALIBRATE`).
     probe: probe::ProbeState,
+    /// `[adxl345 X]`: measuring or not, and its timestamps.
+    adxl: accel::AdxlState,
+    /// `VibrationPulseTest::m_hz_per_sec` once a test set `HZ_PER_SEC`.
+    res_hz_per_sec: Option<f64>,
     /// What the last power-loss save held (`s_saved_print_para`).
     bsp: breaksave::Saved,
 }
@@ -306,16 +312,7 @@ pub const COMMANDS: &[&str] = &[
 
 /// Commands that exist on the printer but whose subsystem ccos does not
 /// have yet (the accelerometer). They are accepted and logged.
-pub const NOT_YET: &[(&str, &str)] = &[
-    ("ACCELEROMETER_MEASURE_X", "accelerometer"),
-    ("ACCELEROMETER_QUERY_X", "accelerometer"),
-    ("ADXL345_DEBUG_READ_X", "accelerometer"),
-    ("ADXL345_DEBUG_WRITE_X", "accelerometer"),
-    ("MEASURE_AXES_NOISE", "accelerometer"),
-    ("SHAPER_CALIBRATE", "accelerometer"),
-    ("SHAPER_CALIBRATE_SCRIPT", "accelerometer"),
-    ("TEST_RESONANCES", "accelerometer"),
-];
+pub const NOT_YET: &[(&str, &str)] = &[];
 
 impl Exec {
     pub fn new(p: Shared, ctl: Arc<Control>, jobs: Option<Receiver<Job>>) -> Self {
@@ -349,6 +346,8 @@ impl Exec {
             tmc,
             sg: Default::default(),
             probe: Default::default(),
+            adxl: Default::default(),
+            res_hz_per_sec: None,
             bsp: Default::default(),
         }
     }
@@ -410,6 +409,9 @@ impl Exec {
         }
         if self.probe_handles(&key) {
             return self.cmd_probe(&key, g);
+        }
+        if self.adxl_handles(&key) {
+            return self.cmd_adxl(&key, g);
         }
         if self.mesh_handles(&key) {
             return self.cmd_mesh(&key, g);
@@ -540,6 +542,10 @@ impl Exec {
             }
             // input shaper (values kept; shaping itself is not in ccos yet)
             "SET_INPUT_SHAPER" | "M593" => self.cmd_set_input_shaper(g),
+            "TEST_RESONANCES" => self.cmd_test_resonances(g),
+            "SHAPER_CALIBRATE" => self.cmd_shaper_calibrate(g),
+            "SHAPER_CALIBRATE_SCRIPT" => self.cmd_shaper_calibrate_script(),
+            "MEASURE_AXES_NOISE" => self.cmd_measure_axes_noise(g),
             // homing
             "G28" => self.cmd_g28(g, false),
             "CUSTOM_ZERO" => self.cmd_g28(g, true),

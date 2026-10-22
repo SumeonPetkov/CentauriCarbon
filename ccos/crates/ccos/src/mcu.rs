@@ -259,6 +259,11 @@ impl Mcu {
         n - self.sched.len()
     }
 
+    /// Held messages not yet sent.
+    pub fn held_len(&self) -> usize {
+        self.held.len()
+    }
+
     /// Scheduled messages not yet sent.
     pub fn backlog(&self) -> usize {
         self.sched.len() + self.held.len()

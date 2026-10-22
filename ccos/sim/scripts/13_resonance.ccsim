@@ -1,0 +1,56 @@
+# The toolhead accelerometer (a LIS2DW12 on the toolhead MCU's SPI1) and
+# the resonance test. The toolhead rings at X 62 Hz, Y 38 Hz here, away
+# from the configured shaper (mzv 54.8 / zv 46.4), so the fit has to come
+# from the measurement.
+option speed 3
+option resonance 62 38 0.05 0.05
+wait_until links == 3 timeout 20
+# at rest the chip reads only gravity: z about +9807 mm/s²
+gcode ACCELEROMETER_QUERY_X
+wait 1
+wait_until busy == 0 timeout 30
+wait 0.3
+expect console ~ "adxl345 values ("
+expect console !~ "Unknown command"
+# a measurement to a CSV file
+gcode ACCELEROMETER_MEASURE_X
+wait 1.5
+gcode ACCELEROMETER_MEASURE_X NAME=test
+wait 0.5
+wait_until busy == 0 timeout 10
+expect tmp_files ~ "adxl345-adxl345 X-test.csv"
+expect accel_samples > 1000
+gcode ADXL345_DEBUG_READ_X REG=37
+gcode ADXL345_DEBUG_WRITE_X REG=37 VAL=52
+wait 0.5
+# noise at rest, then the pulse test on both axes (shortened: 20-90 Hz at
+# 1.9 Hz/s) and the mzv fit
+gcode G28
+wait 1
+wait_until busy == 0 timeout 120
+gcode MEASURE_AXES_NOISE
+wait 1
+wait_until busy == 0 timeout 30
+expect console ~ "Axes noise for xy-axis accelerometer: "
+gcode SHAPER_CALIBRATE FREQ_START=20 FREQ_END=90 HZ_PER_SEC=1.9
+wait 1
+wait_until busy == 0 timeout 300
+expect console ~ "Disabled [input_shaper] for resonance testing"
+expect console ~ "Re-enabled [input_shaper]"
+expect console ~ "shaper name = mzv"
+show shaper_freq_x shaper_freq_y shaper_type_x shaper_type_y
+expect shaper_freq_x > 55
+expect shaper_freq_x < 70
+expect shaper_freq_y > 32
+expect shaper_freq_y < 45
+# a diagonal test (spectrum only, nothing saved); no AXIS is an error
+gcode TEST_RESONANCES AXIS=1,1 FREQ_START=40 FREQ_END=50
+wait 1
+wait_until busy == 0 timeout 60
+expect console ~ "Testing frequency 40.000000 Hz to 50.000000 Hz"
+gcode TEST_RESONANCES
+wait 0.5
+expect console ~ "missing AXIS"
+expect shaper_freq_x > 55
+expect mcu_shutdown == "none"
+expect shutdown == "none"

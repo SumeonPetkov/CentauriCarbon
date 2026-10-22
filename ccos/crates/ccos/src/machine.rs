@@ -162,6 +162,10 @@ pub struct Machine {
     pub hx711s: Option<crate::loadcell::Hx711sCfg>,
     pub strain_gauge: Option<crate::loadcell::StrainGaugeCfg>,
     pub dirzctl_step_base: Option<f64>,
+    /// `[adxl345 X]` on the toolhead.
+    pub adxl: Option<crate::accel::AdxlCfg>,
+    /// `[resonance_tester]` (loaded with or without the section).
+    pub resonance: crate::resonance::ResonanceCfg,
 }
 
 #[derive(Debug, Clone)]
@@ -365,6 +369,8 @@ impl Machine {
             hx711s: crate::loadcell::Hx711sCfg::from_config(c),
             strain_gauge: crate::loadcell::StrainGaugeCfg::from_config(c),
             dirzctl_step_base: c.has_section("dirzctl").then(|| c.get_double("dirzctl", "step_base", 2.0)),
+            adxl: crate::accel::AdxlCfg::from_config(c).filter(|a| a.cs_pin.target == Target::Toolhead),
+            resonance: crate::resonance::ResonanceCfg::from_config(c),
         }
     }
 
@@ -439,7 +445,10 @@ pub mod toolhead {
     pub const LED: u8 = 6;
     /// TMC2209 UART of the extruder (tx PC6, rx PC7).
     pub const TMCUART: u8 = 7;
-    pub const COUNT: u8 = 8;
+    /// `[adxl345 X]`: its SPI device (CS PA4 on SPI1) and the LIS2DW12.
+    pub const ACCEL_SPI: u8 = 8;
+    pub const ACCEL: u8 = 9;
+    pub const COUNT: u8 = 10;
 }
 
 /// ADC (Define.h): 8 samples 1 ms apart, reported every 0.5 s.

@@ -78,6 +78,11 @@ fn probe_commands() {
     run("12_probe.ccsim");
 }
 
+#[test]
+fn accelerometer_and_resonance() {
+    run("13_resonance.ccsim");
+}
+
 /// Every script file has a test above.
 #[test]
 fn all_scripts_listed() {

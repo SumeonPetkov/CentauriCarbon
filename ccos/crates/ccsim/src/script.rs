@@ -4,6 +4,7 @@
 //! option speed 20                 # thermal speed-up (also: corrupt <p>, bootloader)
 //! option config strain_gauge enable_z_home 1   # a user_printer.cfg entry
 //! option bed_shape 0.3 -0.2 0.1   # bed tilt in X, in Y, dome (mm)
+//! option resonance 60 40 0.05 0.1 # toolhead resonance X, Y (Hz), damping X, Y
 //! wait_until links == 3 timeout 20
 //! tap "Light"                     # a visible widget by its text (or: tap 120 200)
 //! expect light == 1
@@ -132,6 +133,11 @@ pub fn parse(text: &str, opts: &mut Options) -> Result<Script, String> {
                         let v: Vec<f64> = v.split_whitespace().filter_map(|s| s.parse().ok()).collect();
                         let [a, b, c] = v[..] else { return Err(err("option bed_shape <tilt x> <tilt y> <dome> (mm)".into())) };
                         opts.bed_shape = [a, b, c];
+                    }
+                    "resonance" => {
+                        let v: Vec<f64> = v.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+                        let [a, b, c, d] = v[..] else { return Err(err("option resonance <x Hz> <y Hz> <x damping> <y damping>".into())) };
+                        opts.resonance = [a, b, c, d];
                     }
                     _ => return Err(err(format!("unknown option '{k}'"))),
                 }

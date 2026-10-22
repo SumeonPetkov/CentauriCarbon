@@ -118,6 +118,13 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
      `LIFT_HOT_BED`, `PRTOUCH_READY`, `CHECK_BED_MESH`,
      `MEASURE_GAP_TEST`, `NOZZLE_CLEAR`. Tested in the emulator
      (`12_probe`), not yet on a printer.
+   - 🟡 Done: the accelerometer and the resonance test (`accel.rs`,
+     `resonance.rs`, `gcode/accel.rs`, `gcode/resonance.rs`): the
+     LIS2DW12 on the toolhead MCU, `ACCELEROMETER_*_X`,
+     `ADXL345_DEBUG_*_X`, Elegoo's pulse test and the mzv fit
+     (`TEST_RESONANCES`, `SHAPER_CALIBRATE`, `SHAPER_CALIBRATE_SCRIPT`,
+     `MEASURE_AXES_NOISE`). Tested against a virtual LIS2DW12 on a
+     ringing toolhead (`13_resonance`), not yet on a printer.
 9. ✅ **G-code interpreter** (`gcode/`, `config.rs`): a port of the stock
    one. It has the same parser, the full command set the Centauri Carbon
    loads, and the same defaults, range checks and internal scripts (G28,
@@ -126,8 +133,8 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
    deliberate differences: [10](10-gcode.md). Power-loss resume
    (`break_save`: watcher, save file, boot prompt, `STOP_RESUME`) is
    ported; tested in the emulator (`11_power_loss`), not yet on a printer.
-   Commands whose subsystem (items 6–8) is missing are accepted and
-   reported as such.
+   With the accelerometer, every command the printer registers is
+   implemented.
 10. **Network** — Moonraker-compatible HTTP/websocket API (works with
     OrcaSlicer, Mainsail, Fluidd) and/or SDCP (websocket on :3030, UDP
     discovery on :3000; documented in OpenCentauri `docs/software/api.md`).

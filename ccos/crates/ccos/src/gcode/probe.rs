@@ -37,7 +37,8 @@ impl Exec {
         match key {
             "PROBE" | "QUERY_PROBE" | "PROBE_CALIBRATE" | "PROBE_ACCURACY" => cfg.has_section("probe"),
             "HOME_ACCURACY" => cfg.has_section("bed_mesh_probe"),
-            "CALIBRATE_Z_OFFSET" | "LIFT_HOT_BED" => cfg.has_section("auto_leveling"),
+            // load_object("auto_leveling") runs with or without the section
+            "CALIBRATE_Z_OFFSET" | "LIFT_HOT_BED" => true,
             _ => false,
         }
     }

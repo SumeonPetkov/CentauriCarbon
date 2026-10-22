@@ -163,6 +163,8 @@ pub struct Core {
     pub sg: crate::loadcell::SgState,
     /// Power-loss resume: the print snapshot and the watcher's flags.
     pub bs: crate::breaksave::BreakSave,
+    /// `adxl_raw_samples`: what the accelerometer's data handler stored.
+    pub accel: crate::accel::RawSamples,
     /// Pending fan callbacks: token → fan index.
     fan_tokens: Vec<(u32, usize)>,
     next_token: u32,
@@ -317,6 +319,7 @@ impl Core {
             last_move_add: 0.0,
             responses: VecDeque::with_capacity(64),
             sg: Default::default(),
+            accel: Default::default(),
             bs,
             fan_tokens: Vec::new(),
             next_token: 1,
@@ -328,6 +331,15 @@ impl Core {
             exit: false,
             wake_fd,
         };
+        if let Some(a) = &core.m.adxl {
+            for w in a.warnings.clone() {
+                core.log(w);
+            }
+            core.log(format!("section_name = {} use_mcu_spi = 1 adxl_type = {}", a.section, a.type_name()));
+        }
+        for w in core.m.resonance.warnings.clone() {
+            core.log(w);
+        }
         // PrinterExtruder::PrinterExtruder, then InputShaper::connect
         core.set_pressure_advance(pa.0, pa.1);
         if has_shaper {
@@ -380,6 +392,27 @@ impl Core {
         for k in &mut self.kins {
             k.set_shaper(sx, sy);
         }
+    }
+
+    /// `InputShaper::disable_shaping`: frequencies to 0, the old ones kept.
+    pub fn disable_shaping(&mut self) {
+        let s = self.shaper;
+        if (s.saved_freq_x != 0.0 || s.saved_freq_y != 0.0) && !(s.freq_x != 0.0 || s.freq_y != 0.0) {
+            return;
+        }
+        (self.shaper.saved_freq_x, self.shaper.saved_freq_y) = (s.freq_x, s.freq_y);
+        self.set_input_shaper(s.type_x, s.type_y, 0.0, 0.0, s.damping_x, s.damping_y);
+    }
+
+    /// `InputShaper::enable_shaping`.
+    pub fn enable_shaping(&mut self) -> bool {
+        let s = self.shaper;
+        let saved = s.saved_freq_x != 0.0 || s.saved_freq_y != 0.0;
+        if saved {
+            self.set_input_shaper(s.type_x, s.type_y, s.saved_freq_x, s.saved_freq_y, s.damping_x, s.damping_y);
+        }
+        (self.shaper.saved_freq_x, self.shaper.saved_freq_y) = (0.0, 0.0);
+        saved
     }
 
     /// Committed planner moves into the trapqs (`trapq_append`,
@@ -1048,7 +1081,14 @@ impl Core {
                     let time = mcu.clock.time(mcu.clock.extend(tick));
                     self.sg.dirzctl.push(crate::loadcell::DirzResult { step: m.int("step").unwrap_or(0) as u32, tick, time });
                 }
-                "trsync_state" | "stepper_position" | "endstop_state" | "pong" | "tmcuart_response" => {
+                // ADXL345::_handle_adxl345_data
+                "lis2dw_data" | "adxl345_data" if target == Target::Toolhead && m.int("oid") == Some(toolhead::ACCEL as i64) => {
+                    let data = m.message().bytes("data").unwrap_or(&[]).to_vec();
+                    if let Some(e) = self.accel.handle_data(m.int("sequence").unwrap_or(0), &data) {
+                        self.log(e);
+                    }
+                }
+                "trsync_state" | "stepper_position" | "endstop_state" | "pong" | "tmcuart_response" | "spi_transfer_response" | "lis2dw_status" | "adxl345_end" => {
                     if m.name() == "trsync_state" {
                         self.trdispatch_state(target, &m);
                     }
@@ -1217,6 +1257,14 @@ fn configure(mcu: &mut Mcu, mc: &Machine, t: Target, motion: bool) -> Result<()>
     }
     for (oid, p, _, _, _) in &adcs {
         cmds.push(format!("config_analog_in oid={oid} pin={p}"));
+    }
+    if let (Target::Toolhead, Some(a)) = (t, &mc.adxl) {
+        // MCU_SPI (mode 3) and ADXL345::ADXL345; spi_set_bus comes from
+        // MCU_SPI::build_config, after the chip's config_lis2dw
+        cmds.push(format!("config_spi oid={} pin={}", toolhead::ACCEL_SPI, pin(&a.cs_pin)?));
+        let chip = if a.kind == crate::accel::AdxlType::Lis2dw12 { "config_lis2dw" } else { "config_adxl345" };
+        cmds.push(format!("{chip} oid={} spi_oid={}", toolhead::ACCEL, toolhead::ACCEL_SPI));
+        cmds.push(format!("spi_set_bus oid={} spi_bus={} mode=3 rate={}", toolhead::ACCEL_SPI, a.spi_bus, a.spi_speed as u32));
     }
     if motion {
         // MCU_TMC_uart_bitbang::build_config, 20 kbaud

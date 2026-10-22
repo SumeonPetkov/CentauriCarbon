@@ -97,6 +97,11 @@ pub trait Hardware {
     fn load_cell(&mut self, _mcu: McuKind, _t: f64) -> i32 {
         0
     }
+    /// One SPI transaction with chip select `cs_pin` low; the device's
+    /// reply replaces `data` (MISO, byte for byte).
+    fn spi(&mut self, _mcu: McuKind, _cs_pin: u32, data: &mut [u8], _t: f64) {
+        data.fill(0);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -242,6 +247,27 @@ struct Dirzctl {
     wake: Option<u64>,
 }
 
+/// spicmds.c: a device on an SPI bus (`cs_pin` None = no chip select).
+struct Spi {
+    cs_pin: Option<u32>,
+}
+
+/// sensor_lis2dw.c
+#[derive(Default)]
+struct Lis2dw {
+    spi_oid: usize,
+    wake: Option<u64>,
+    rest_ticks: u32,
+    flags: u8,
+    sequence: u16,
+    limit_count: u16,
+    data: Vec<u8>,
+    fifo_disable: bool,
+}
+
+const LIS_HAVE_START: u8 = 1 << 0;
+const LIS_RUNNING: u8 = 1 << 1;
+
 enum Obj {
     Unused,
     Stepper(Stepper),
@@ -253,7 +279,9 @@ enum Obj {
     TmcUart(TmcUart),
     Dirzctl(Dirzctl),
     Hx711s(Box<crate::hx711s::Hx711s>),
-    /// Fan tach, accelerometer…: accepted, not simulated.
+    Spi(Spi),
+    Lis2dw(Lis2dw),
+    /// Fan tach, buttons…: accepted, not simulated.
     Other,
 }
 
@@ -1012,8 +1040,56 @@ impl VirtualMcu {
                 self.send_debug_hx711s(oid, d);
             }
 
-            // Accepted but not simulated: fan tachs, accelerometers,
-            // buttons, displays.
+            // spicmds.c
+            "config_spi" => self.set_obj(a("oid"), Obj::Spi(Spi { cs_pin: Some(a("pin") as u32) }), hw),
+            "config_spi_without_cs" => self.set_obj(a("oid"), Obj::Spi(Spi { cs_pin: None }), hw),
+            "spi_set_bus" | "spi_set_software_bus" => {
+                if !matches!(self.objs.get(a("oid") as usize), Some(Obj::Spi(_))) {
+                    self.shutdown_named("Invalid oid type", hw);
+                }
+            }
+            "spi_transfer" | "spi_send" => {
+                let oid = a("oid") as usize;
+                let mut data = m.bytes("data").unwrap_or(&[]).to_vec();
+                if !self.spi_transfer(oid, &mut data, hw) {
+                    return self.shutdown_named("Invalid oid type", hw);
+                }
+                if name == "spi_transfer" {
+                    self.send("spi_transfer_response", &[("oid", Arg::Int(oid as i64)), ("response", Arg::Bytes(&data))]);
+                }
+            }
+
+            // sensor_lis2dw.c
+            "config_lis2dw" => {
+                let l = Lis2dw { spi_oid: a("spi_oid") as usize, data: Vec::with_capacity(48), ..Default::default() };
+                self.set_obj(a("oid"), Obj::Lis2dw(l), hw);
+            }
+            "query_lis2dw" => {
+                let oid = a("oid") as usize;
+                if a("rest_ticks") == 0 {
+                    return self.lis2dw_stop(oid, hw);
+                }
+                let wake = self.clk(a("clock"));
+                let Some(Obj::Lis2dw(l)) = self.objs.get_mut(oid) else { return self.shutdown_named("Invalid oid type", hw) };
+                l.wake = Some(wake);
+                l.rest_ticks = a("rest_ticks") as u32;
+                l.flags = LIS_HAVE_START;
+                l.sequence = 0;
+                l.limit_count = 0;
+                l.data.clear();
+                l.fifo_disable = false;
+            }
+            "query_lis2dw_status" => {
+                let oid = a("oid") as usize;
+                let t1 = self.now;
+                let mut msg = [crate::accel::FIFO_SAMPLES | 0x80, 0];
+                let Some(Obj::Lis2dw(l)) = self.objs.get(oid) else { return self.shutdown_named("Invalid oid type", hw) };
+                let spi = l.spi_oid;
+                self.spi_transfer(spi, &mut msg, hw);
+                self.lis2dw_status(oid, t1, self.now, msg[1] & 0x1f);
+            }
+
+            // Accepted but not simulated: fan tachs, buttons, displays.
             n if n.starts_with("config_") => self.set_obj(a("oid"), Obj::Other, hw),
             _ => {}
         }
@@ -1087,6 +1163,104 @@ impl VirtualMcu {
                 ("tt", Arg::Int(r.tt as i64)),
             ];
             self.send("sg_resp", &a);
+        }
+    }
+
+    /// `spidev_transfer`: false if `oid` is not an SPI device.
+    fn spi_transfer(&mut self, oid: usize, data: &mut [u8], hw: &mut dyn Hardware) -> bool {
+        let Some(Obj::Spi(s)) = self.objs.get(oid) else { return false };
+        match s.cs_pin {
+            Some(pin) => hw.spi(self.kind, pin, data, self.time_of(self.now)),
+            None => data.fill(0),
+        }
+        true
+    }
+
+    fn lis2dw_report(&mut self, oid: usize) {
+        let Some(Obj::Lis2dw(l)) = self.objs.get_mut(oid) else { return };
+        let (seq, data) = (l.sequence, std::mem::take(&mut l.data));
+        l.sequence = l.sequence.wrapping_add(1);
+        self.send("lis2dw_data", &[("oid", Arg::Int(oid as i64)), ("sequence", Arg::Int(seq as i64)), ("data", Arg::Bytes(&data))]);
+        if let Some(Obj::Lis2dw(l)) = self.objs.get_mut(oid) {
+            l.data = data;
+            l.data.clear();
+        }
+    }
+
+    fn lis2dw_status(&mut self, oid: usize, t1: u64, t2: u64, fifo: u8) {
+        let Some(Obj::Lis2dw(l)) = self.objs.get(oid) else { return };
+        let a = [
+            ("oid", Arg::Int(oid as i64)),
+            ("clock", Arg::Int(t1 as u32 as i64)),
+            ("query_ticks", Arg::Int((t2 - t1) as u32 as i64)),
+            ("next_sequence", Arg::Int(l.sequence as i64)),
+            ("buffered", Arg::Int(l.data.len() as i64)),
+            ("fifo", Arg::Int(fifo as i64)),
+            ("limit_count", Arg::Int(l.limit_count as i64)),
+        ];
+        self.send("lis2dw_status", &a);
+    }
+
+    /// `lis2dw_query`: one sample, then again at once while the FIFO has
+    /// more (the firmware re-wakes its task).
+    fn lis2dw_query(&mut self, oid: usize, hw: &mut dyn Hardware) {
+        loop {
+            let Some(Obj::Lis2dw(l)) = self.objs.get(oid) else { return };
+            let spi = l.spi_oid;
+            let mut msg = [crate::accel::OUT_X_L | 0x80, 0, 0, 0, 0, 0, 0];
+            let mut fifo = [crate::accel::FIFO_SAMPLES | 0x80, 0];
+            self.spi_transfer(spi, &mut msg, hw);
+            self.spi_transfer(spi, &mut fifo, hw);
+            let Some(Obj::Lis2dw(l)) = self.objs.get_mut(oid) else { return };
+            l.data.extend_from_slice(&msg[1..]);
+            let full = l.data.len() + 6 > 48;
+            if fifo[1] & 0x40 != 0 {
+                l.limit_count = l.limit_count.wrapping_add(1);
+            }
+            let more = fifo[1] & 0x3F != 0 && !l.fifo_disable;
+            if full {
+                self.lis2dw_report(oid);
+            }
+            let Some(Obj::Lis2dw(l)) = self.objs.get_mut(oid) else { return };
+            if !more {
+                if l.flags & LIS_RUNNING != 0 {
+                    l.wake = Some(self.now + l.rest_ticks as u64);
+                }
+                return;
+            }
+        }
+    }
+
+    fn lis2dw_stop(&mut self, oid: usize, hw: &mut dyn Hardware) {
+        let Some(Obj::Lis2dw(l)) = self.objs.get_mut(oid) else { return self.shutdown_named("Invalid oid type", hw) };
+        l.wake = None;
+        l.flags = 0;
+        l.fifo_disable = true;
+        let spi = l.spi_oid;
+        self.lis2dw_query(oid, hw);
+        let end1 = self.now;
+        self.spi_transfer(spi, &mut [crate::accel::FIFO_CTRL, 0], hw);
+        let end2 = self.now;
+        let mut msg = [crate::accel::FIFO_SAMPLES | 0x80, 0];
+        self.spi_transfer(spi, &mut msg, hw);
+        if matches!(self.objs.get(oid), Some(Obj::Lis2dw(l)) if !l.data.is_empty()) {
+            self.lis2dw_report(oid);
+        }
+        self.lis2dw_status(oid, end1, end2, msg[1] & 0x1f);
+    }
+
+    fn lis2dw_event(&mut self, oid: usize, hw: &mut dyn Hardware) {
+        let Some(Obj::Lis2dw(l)) = self.objs.get_mut(oid) else { return };
+        l.wake = None;
+        if l.flags & LIS_HAVE_START != 0 {
+            // lis2dw_start
+            l.flags = LIS_RUNNING;
+            l.fifo_disable = false;
+            l.wake = Some(self.now + l.rest_ticks as u64);
+            let spi = l.spi_oid;
+            self.spi_transfer(spi, &mut [crate::accel::FIFO_CTRL, 0xC0], hw);
+        } else {
+            self.lis2dw_query(oid, hw);
         }
     }
 
@@ -1436,6 +1610,11 @@ impl VirtualMcu {
                     }
                     consider(h.exi_next, oid, 1)
                 }
+                Obj::Lis2dw(l) => {
+                    if let Some(w) = l.wake {
+                        consider(w, oid, 0)
+                    }
+                }
                 _ => {}
             }
         }
@@ -1514,6 +1693,7 @@ impl VirtualMcu {
                     Obj::TmcUart(_) => self.tmcuart_event(oid, hw),
                     Obj::Dirzctl(_) => self.dirzctl_event(oid, hw),
                     Obj::Hx711s(_) => self.hx711s_event(oid, k, hw),
+                    Obj::Lis2dw(_) => self.lis2dw_event(oid, hw),
                     Obj::Trsync(_) => {
                         if k == 1 {
                             if let Some(Obj::Trsync(ts)) = self.objs.get_mut(oid) {

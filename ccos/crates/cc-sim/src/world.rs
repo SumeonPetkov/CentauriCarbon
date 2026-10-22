@@ -83,6 +83,9 @@ pub struct WorldConfig {
     /// from Y 0 to 256, dome (centre above the edges)]. The Z limits, the
     /// endstop and the gap are measured at the bed centre.
     pub bed_shape: [f64; 3],
+    /// Toolhead resonances on the belts: [X Hz, Y Hz, X damping ratio, Y
+    /// damping ratio] (default: the stock printer.cfg shaper values).
+    pub resonance: [f64; 4],
 }
 
 impl Default for WorldConfig {
@@ -99,6 +102,7 @@ impl Default for WorldConfig {
             // the bed ~4.5 mm below the nozzle (printer.cfg position_endstop_extra)
             z_trigger: 4.5,
             bed_shape: [0.0; 3],
+            resonance: [54.8, 46.4, 0.06, 0.082],
         }
     }
 }
@@ -268,6 +272,8 @@ pub struct World {
     pub faults: std::collections::HashSet<Fault>,
     pub raster: Vec<f32>,
     pub stats: PrintStats,
+    /// The toolhead accelerometer and the toolhead's motion on the belts.
+    pub accel: crate::accel::Lis2dw12,
     /// Molten filament in the nozzle not yet laid down (mm of filament).
     pub melt: f64,
     flow_t: f64,
@@ -372,6 +378,7 @@ impl World {
             faults: Default::default(),
             raster: vec![f32::NAN; RASTER_SIZE * RASTER_SIZE],
             stats: PrintStats::default(),
+            accel: crate::accel::Lis2dw12::new(cfg.resonance, [cfg.start[0], cfg.start[1]]),
             melt: 0.0,
             flow_t: 0.0,
             unmarked: 0.0,
@@ -647,7 +654,10 @@ impl Hardware for World {
         }
         m.last_step_t = t;
         match i {
-            0 | 1 => self.carriage_moved(0b011),
+            0 | 1 => {
+                self.carriage_moved(0b011);
+                self.accel.carriage_moved(t, self.pos[0], self.pos[1]);
+            }
             2 => {
                 let was = self.stalled[2];
                 self.carriage_moved(0b100);
@@ -739,6 +749,15 @@ impl Hardware for World {
         // ~normal noise: sum of four uniforms
         let n: f64 = (0..4).map(|_| self.rand() - 0.5).sum::<f64>() * BRIDGE_NOISE * 3f64.sqrt();
         (BRIDGE_ZERO + n - LOAD_COUNTS_PER_MM * depth).round() as i32
+    }
+
+    fn spi(&mut self, mcu: McuKind, cs_pin: u32, data: &mut [u8], t: f64) {
+        // the LIS2DW12 on the toolhead's SPI1, CS PA4
+        if mcu == McuKind::Toolhead && Some(cs_pin) == pin_number("PA4", mcu.pins_per_bank()) {
+            self.accel.transfer(t, data);
+        } else {
+            data.fill(0);
+        }
     }
 
     fn uart(&mut self, mcu: McuKind, tx_pin: u32, rx_pin: u32, sent: &[u8], t: f64) -> Option<(Vec<u8>, u32)> {
