@@ -3,14 +3,14 @@
 # Edit, run `cargo build`, done. Build errors point at the exact line.
 
 [colors]
-bg = "#1E1E20"       # screen background
-panel = "#383837"    # tiles, buttons
-pressed = "#505050"  # button while touched, bar track
-accent = "#22D000"   # Elegoo green: active items, bars
+bg = "#1E1E20"       # screen background (unchanged)
+panel = "#383837"    # tiles, buttons (unchanged)
+pressed = "#3A4A55"  # button while touched, bar track: slate with a blue tint
+accent = "#00E5FF"   # electric cyan: active items, bars
 text = "#FFFFFF"
-dim = "#A0A0A0"
-hot = "#FF7A1A"
-danger = "#E03030"
+dim = "#8FA8B8"      # cool blue-grey for secondary labels
+hot = "#FF9A1F"      # warm amber, stands out against all the cyan
+danger = "#FF3355"   # neon red-pink
 
 # Fonts are baked at the given pixel size. All characters used in screen text
 # plus ASCII and ° ± × · — – − → ← ↑ ↓ … • ✓ ✗ are included (live values can use
