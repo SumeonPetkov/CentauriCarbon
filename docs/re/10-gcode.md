@@ -521,6 +521,27 @@ here; the additions only give meaning to lines the stock firmware ignores.
   the stock firmware has no command to load a profile
   (`BED_MESH_PROFILE` is never registered).
 - While probing, the status line reads `Bed mesh: point <n> of <total>`.
+- The **Calibration** screen (Tools → Calibrate) holds the stock
+  auto-level, PID, vibration and one-click pages on one screen, in
+  ccos's style. Pick any of the three, then Start. They run in the stock
+  one-click order: `SHAPER_CALIBRATE_SCRIPT`, `PID_CALIBRATE_NOZZLE
+  TARGET_TEMP=<t>`, `G29`. Start is refused while printing.
+  - Each row follows the states the stock backend sends its pages, at the
+    same places: G29's start, preheat, probe and finish, one event per
+    probed point, and probe errors; PID's start, preheat done and finish;
+    the resonance script's start, X, Y and finish, and the X/Y error when
+    a measurement doesn't start. The texts are the stock English strings
+    ("Returning to home...", "Automatic leveling...", "Tuning the Nozzle
+    PID ...", "Sensor detecting...", "ErrorCode:401,Accelerometer chip
+    error.", …).
+  - Auto-level has the stock progress bar: 1 % every 12 s (the "About
+    20 min" estimate), held at 95 % until it finishes. Its plate button
+    is the stock A/B choice: sysconf `print_platform_type` and
+    `BED_MESH_SET_INDEX TYPE=standard|enhancement INDEX=0`.
+  - The PID target is set with −/+ in steps of 10 between 190 and 320 °C,
+    as on the stock PID page. It starts at 220, the one-click value.
+  - When it isn't running, the vibration row shows the saved shaper type
+    and frequency for X and Y.
 
 ## Deliberate differences
 
@@ -562,6 +583,7 @@ here; the additions only give meaning to lines the stock firmware ignores.
 | `save_params` | `std::string` passed to `%s` | the shaper name | undefined behaviour |
 | Accelerometer CSV folder | `/tmp` | `/tmp` (`<sim dir>/tmp` in the emulator, or `CCOS_TMP_DIR`) | same on the printer |
 | Accelerometer register read-back after a timed write | waits behind the write (same SPI command queue) | waits for the held write to go out | same |
+| A calibration that ends without its finish or error state (G28 failing in `PID_CALIBRATE_NOZZLE` or `SHAPER_CALIBRATE_SCRIPT`, an aborted G29) | the page waits forever | once its commands are done, the Calibration screen marks it failed | a hang |
 
 ## Tests
 
@@ -593,3 +615,6 @@ here; the additions only give meaning to lines the stock firmware ignores.
     CSV, measures the noise, and runs `SHAPER_CALIBRATE` on a toolhead
     that rings at X 62 Hz / Y 38 Hz: the fit lands at 63.6 / 38.4 Hz.
     It also runs a diagonal `TEST_RESONANCES`.
+  - `14_calibration` drives the Calibration screen: the plate choice, the
+    PID target limits, the selection, then a run of all three, checking
+    each row's stages and the results.

@@ -125,6 +125,10 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
      (`TEST_RESONANCES`, `SHAPER_CALIBRATE`, `SHAPER_CALIBRATE_SCRIPT`,
      `MEASURE_AXES_NOISE`). Tested against a virtual LIS2DW12 on a
      ringing toolhead (`13_resonance`), not yet on a printer.
+   - 🟡 Done: the Calibration screen (Tools → Calibrate,
+     `ui/screens/calibrate.toml`): the stock auto-level, PID, vibration
+     and one-click pages on one screen, fed by the stock progress states.
+     Tested in the emulator (`14_calibration`), not yet on a printer.
 9. ✅ **G-code interpreter** (`gcode/`, `config.rs`): a port of the stock
    one. It has the same parser, the full command set the Centauri Carbon
    loads, and the same defaults, range checks and internal scripts (G28,

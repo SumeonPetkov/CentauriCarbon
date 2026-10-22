@@ -1,0 +1,95 @@
+# The Calibrate screen (Tools → Calibrate): the stock auto-level, PID and
+# vibration pages and the one-click run on one screen. Start runs the
+# selection in the stock one-click order (SHAPER_CALIBRATE_SCRIPT,
+# PID_CALIBRATE_NOZZLE, G29) and each row follows the firmware's progress
+# states. Shortened: a 3×3 mesh and a 20-90 Hz sweep at 2 Hz/s.
+option speed 3
+option resonance 62 38 0.05 0.05
+option config bed_mesh probe_count 3,3
+option config resonance_tester min_freq 20
+option config resonance_tester max_freq 90
+option config resonance_tester hz_per_sec 2
+wait_until links == 3 timeout 20
+goto tools
+tap "Calibrate"
+wait 0.3
+expect screen == "calibrate"
+expect calib_start == "Start"
+expect calib_level_detail == "Plate A · About 20 min"
+expect calib_vib_detail == "X mzv 54.8 Hz · Y zv 46.4 Hz"
+# nothing selected
+command calib_start
+wait 0.3
+expect status == "Select what to calibrate"
+# the plate choice: sysconf print_platform_type and the matching mesh
+command calib_plate
+wait 0.5
+wait_until busy == 0 timeout 10
+expect platform_type == 1
+expect calib_plate == "Plate B"
+command calib_plate
+wait 0.5
+wait_until busy == 0 timeout 10
+expect platform_type == 0
+expect calib_plate == "Plate A"
+# the PID target: 190-320 in steps of 10, from 220
+command calib_pid_down
+command calib_pid_down
+command calib_pid_down
+command calib_pid_down
+wait 0.2
+expect calib_pid_detail == "Target 190°"
+command calib_pid_up
+command calib_pid_up
+command calib_pid_up
+wait 0.2
+expect calib_pid_detail == "Target 220°"
+# select all, then none, then each
+tap "Select all"
+wait 0.2
+tap "Select all"
+wait 0.2
+tap "Auto-level"
+tap "PID tuning"
+tap "Vibration"
+wait 0.3
+screenshot shots/calibrate.png
+command calib_start
+wait 0.5
+expect calib_start == "Running..."
+expect calib_vib == "Sensor detecting..."
+expect calib_pid == "Waiting"
+expect calib_level == "Waiting"
+# the selection is locked while it runs
+command calib_toggle_level
+command calib_pid_up
+wait 0.2
+expect calib_pid_detail == "Target 220°"
+# vibration: noise, homing, X and Y
+wait_until calib_vib == "Vibration calibrating ..." timeout 60
+wait_until calib_vib_detail == "Y axis" timeout 300
+wait_until calib_vib == "Calibration completed" timeout 300
+expect calib_vib_detail ~ "X mzv 6"
+expect console ~ "shaper name = mzv"
+# PID: preheat to 100 °C, then the autotune
+wait_until calib_pid == "Tuning the Nozzle PID ..." timeout 300
+screenshot shots/calibrate_pid.png
+wait_until calib_pid == "Calibration completed" timeout 900
+expect console ~ "Autotune: final: Kp="
+expect pid_kp > 0
+# auto-level: home, preheat, probe
+wait_until calib_level == "Preheating..." timeout 120
+wait 3
+expect calib_level_detail ~ "Nozzle "
+screenshot shots/calibrate_level.png
+wait_until calib_level == "Automatic leveling..." timeout 600
+expect calib_progress < 0.95
+wait_until calib_level == "Completed" timeout 600
+wait_until calib_start == "Start" timeout 120
+expect calib_level_detail ~ "points probed"
+expect calib_progress == 1
+screenshot shots/calibrate_done.png
+expect calib_vib == "Calibration completed"
+expect calib_pid == "Calibration completed"
+expect mcu_shutdown == "none"
+expect shutdown == "none"

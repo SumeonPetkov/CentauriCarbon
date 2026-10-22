@@ -51,6 +51,156 @@ pub struct PrintInfo {
     pub total_layers: u32,
 }
 
+/// One calibration's progress on the Calibrate screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Step {
+    #[default]
+    Idle,
+    /// Selected for the run, not started yet.
+    Waiting,
+    Running,
+    Done,
+    Failed,
+}
+
+/// The stock calibration states, sent where the firmware calls
+/// `auto_leveling_state_callback_call`, `probe_state_callback_call`
+/// (bed-mesh points and errors), `pid_calibrate_state_callback_call` and
+/// `resonace_tester_state_callback_call`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalibEvent {
+    LevelStart,
+    LevelPreheat,
+    LevelProbe,
+    LevelPoint,
+    LevelFinish,
+    LevelError,
+    PidStart,
+    PidPreheatDone,
+    PidFinish,
+    PidError,
+    VibStart,
+    VibStartX,
+    VibFinishX,
+    VibStartY,
+    VibFinishY,
+    VibFinish,
+    VibErrorX,
+    VibErrorY,
+}
+
+/// The Calibrate screen: what is selected and how each calibration went
+/// (the stock auto-level, PID, vibration and one-click pages in one).
+#[derive(Debug, Clone)]
+pub struct Calib {
+    /// Auto-level, PID, vibration selected for Start.
+    pub sel: [bool; 3],
+    /// PID target (the stock PID page: 190-320 in steps of 10).
+    pub pid_temp: u32,
+    /// sysconf `print_platform_type` 1 (plate side B).
+    pub plate_b: bool,
+    /// A run started from the screen is going on.
+    pub running: bool,
+    pub level: Step,
+    /// 0 homing, 1 preheating, 2 probing.
+    pub level_stage: u8,
+    pub level_points: u32,
+    pub level_started: Option<Instant>,
+    /// A bed-mesh probe failed (stock "ErrorCode 502").
+    pub level_error: bool,
+    pub pid: Step,
+    /// 0 preheating, 1 tuning.
+    pub pid_stage: u8,
+    pub vib: Step,
+    /// 0 checking the sensor (noise), 1 X axis, 2 Y axis.
+    pub vib_stage: u8,
+    /// 401 (X) / 402 (Y): the stock "Accelerometer chip error." codes.
+    pub vib_error: u16,
+    /// Saved `[input_shaper]` type and frequency, X and Y.
+    pub shaper: [(String, f64); 2],
+}
+
+impl Default for Calib {
+    fn default() -> Self {
+        Self {
+            sel: [false; 3],
+            pid_temp: 220,
+            plate_b: false,
+            running: false,
+            level: Step::Idle,
+            level_stage: 0,
+            level_points: 0,
+            level_started: None,
+            level_error: false,
+            pid: Step::Idle,
+            pid_stage: 0,
+            vib: Step::Idle,
+            vib_stage: 0,
+            vib_error: 0,
+            shaper: Default::default(),
+        }
+    }
+}
+
+impl Calib {
+    pub fn event(&mut self, e: CalibEvent) {
+        use CalibEvent::*;
+        match e {
+            LevelStart => {
+                (self.level, self.level_stage, self.level_points, self.level_error) = (Step::Running, 0, 0, false);
+                self.level_started = Some(Instant::now());
+            }
+            LevelPreheat => self.level_stage = 1,
+            LevelProbe => self.level_stage = 2,
+            LevelPoint => self.level_points += 1,
+            LevelFinish => self.level = Step::Done,
+            LevelError => (self.level, self.level_error) = (Step::Failed, true),
+            PidStart => (self.pid, self.pid_stage) = (Step::Running, 0),
+            PidPreheatDone => self.pid_stage = 1,
+            PidFinish => self.pid = Step::Done,
+            PidError => self.pid = Step::Failed,
+            VibStart | VibStartX | VibFinishX => (self.vib, self.vib_stage) = (Step::Running, 1),
+            VibStartY | VibFinishY => (self.vib, self.vib_stage) = (Step::Running, 2),
+            VibFinish => self.vib = Step::Done,
+            VibErrorX | VibErrorY => {
+                self.vib = Step::Failed;
+                self.vib_error = if e == VibErrorX { 401 } else { 402 };
+            }
+        }
+    }
+
+    /// Start pressed: the selected calibrations wait (vibration runs first,
+    /// as in the stock one-click order).
+    pub fn begin(&mut self) {
+        let wait = |sel: bool| if sel { Step::Waiting } else { Step::Idle };
+        (self.level, self.pid, self.vib) = (wait(self.sel[0]), wait(self.sel[1]), wait(self.sel[2]));
+        if self.sel[2] {
+            (self.vib, self.vib_stage, self.vib_error) = (Step::Running, 0, 0);
+        }
+        self.running = true;
+    }
+
+    /// The run's commands are done: what never reported an end failed.
+    pub fn end(&mut self) {
+        for s in [&mut self.level, &mut self.pid, &mut self.vib] {
+            if matches!(*s, Step::Waiting | Step::Running) {
+                *s = Step::Failed;
+            }
+        }
+        self.running = false;
+    }
+
+    /// The stock auto-level bar: 1 % per 12 s (20 minutes), held at 95 %
+    /// until it finishes.
+    pub fn level_progress(&self) -> f32 {
+        match self.level {
+            Step::Done => 1.0,
+            Step::Running => self.level_started.map_or(0.0, |t| (t.elapsed().as_secs() as f32 / 1200.0).min(0.95)),
+            _ => 0.0,
+        }
+    }
+}
+
 pub struct State {
     pub nozzle: Option<f64>,
     pub nozzle_target: f64,
@@ -88,6 +238,7 @@ pub struct State {
     pub resume_offer: Option<String>,
     /// sysconf `power_off_resume_print`.
     pub power_resume: bool,
+    pub calib: Calib,
 }
 
 impl Default for State {
@@ -121,6 +272,7 @@ impl Default for State {
             mesh_sel: 0,
             resume_offer: None,
             power_resume: false,
+            calib: Calib::default(),
         }
     }
 }
@@ -179,6 +331,85 @@ impl Ui {
     }
     pub fn set_status(&self, s: impl Into<String>) {
         self.lock().set_status(s);
+    }
+}
+
+/// `cur/target°` as the stock calibration pages show temperatures.
+fn cur_target(out: &mut TextBuf, cur: Option<f64>, target: f64) {
+    let _ = write!(out, "{}/{:.0}°", cur.map_or("--".to_string(), |c| format!("{c:.0}")), target);
+}
+
+impl State {
+    /// The Calibrate screen's texts (the stock pages' strings).
+    fn calib_text(&self, v: Value, out: &mut TextBuf) {
+        let c = &self.calib;
+        match v {
+            Value::CalibLevelState => out.push_str(match (c.level, c.level_stage) {
+                (Step::Idle, _) => "Probes the bed mesh",
+                (Step::Waiting, _) => "Waiting",
+                (Step::Running, 0) => "Returning to home...",
+                (Step::Running, 1) => "Preheating...",
+                (Step::Running, _) => "Automatic leveling...",
+                (Step::Done, _) => "Completed",
+                (Step::Failed, _) if c.level_error => "ErrorCode:502,Abnormal leveling sensor",
+                (Step::Failed, _) => "Failed",
+            }),
+            Value::CalibLevelDetail => {
+                let _ = match (c.level, c.level_stage) {
+                    (Step::Running, 2) => write!(out, "Point {}", c.level_points),
+                    (Step::Running, _) => {
+                        out.push_str("Nozzle ");
+                        cur_target(out, self.nozzle, self.nozzle_target);
+                        out.push_str(" · bed ");
+                        cur_target(out, self.bed, self.bed_target);
+                        Ok(())
+                    }
+                    (Step::Done, _) => write!(out, "{} points probed", c.level_points),
+                    _ => write!(out, "Plate {} · About 20 min", if c.plate_b { 'B' } else { 'A' }),
+                };
+            }
+            Value::CalibPlate => {
+                let _ = write!(out, "Plate {}", if c.plate_b { 'B' } else { 'A' });
+            }
+            Value::CalibPidState => out.push_str(match (c.pid, c.pid_stage) {
+                (Step::Idle, _) => "Tunes the nozzle heater",
+                (Step::Waiting, _) => "Waiting",
+                (Step::Running, 0) => "Preheating",
+                (Step::Running, _) => "Tuning the Nozzle PID ...",
+                (Step::Done, _) => "Calibration completed",
+                (Step::Failed, _) => "Tuning failed",
+            }),
+            Value::CalibPidDetail => {
+                let _ = write!(out, "Target {}°", c.pid_temp);
+                if c.pid == Step::Running {
+                    out.push_str(" · nozzle ");
+                    cur_target(out, self.nozzle, self.nozzle_target);
+                }
+            }
+            Value::CalibVibState => out.push_str(match (c.vib, c.vib_stage) {
+                (Step::Idle, _) => "Measures and sets the input shaper",
+                (Step::Waiting, _) => "Waiting",
+                (Step::Running, 0) => "Sensor detecting...",
+                (Step::Running, _) => "Vibration calibrating ...",
+                (Step::Done, _) => "Calibration completed",
+                (Step::Failed, _) if c.vib_error == 401 => "ErrorCode:401,Accelerometer chip error.",
+                (Step::Failed, _) if c.vib_error == 402 => "ErrorCode:402,Accelerometer chip error.",
+                (Step::Failed, _) => "Failed",
+            }),
+            Value::CalibVibDetail => match (c.vib, c.vib_stage) {
+                (Step::Running, 0) => out.push_str("Measuring the accelerometer noise"),
+                (Step::Running, 1) => out.push_str("X axis"),
+                (Step::Running, _) => out.push_str("Y axis"),
+                _ => {
+                    let [(tx, fx), (ty, fy)] = &c.shaper;
+                    if !tx.is_empty() || !ty.is_empty() {
+                        let _ = write!(out, "X {tx} {fx:.1} Hz · Y {ty} {fy:.1} Hz");
+                    }
+                }
+            },
+            Value::CalibStart => out.push_str(if c.running { "Running..." } else { "Start" }),
+            _ => {}
+        }
     }
 }
 
@@ -336,6 +567,15 @@ BED_MESH_CALIBRATE S75 pla"),
                 }
             }
             Value::PowerResumeState => out.push_str(if self.power_resume { "On" } else { "Off" }),
+            Value::CalibLevelState
+            | Value::CalibLevelDetail
+            | Value::CalibPlate
+            | Value::CalibPidState
+            | Value::CalibPidDetail
+            | Value::CalibVibState
+            | Value::CalibVibDetail
+            | Value::CalibStart => self.calib_text(v, out),
+            Value::CalibLevelProgress => {}
             Value::MeshHigh | Value::MeshLow | Value::MeshRange | Value::MeshMean => {
                 if let Some(m) = self.shown_mesh().filter(|m| !m.points.is_empty()) {
                     let (lo, hi, mean) = mesh_stats(m);
@@ -366,6 +606,7 @@ BED_MESH_CALIBRATE S75 pla"),
         match v {
             Value::Backlight => self.backlight as f32 / 255.0,
             Value::PrintProgress => self.print.progress,
+            Value::CalibLevelProgress => self.calib.level_progress(),
             _ => 0.0,
         }
     }
@@ -389,6 +630,46 @@ BED_MESH_CALIBRATE S75 pla"),
             Flag::MeshMany => self.meshes.len() > 1,
             Flag::PowerResume => self.power_resume,
             Flag::MeshInUse => self.shown_mesh().is_some_and(|m| self.mesh_active.as_deref() == Some(m.section.as_str())),
+            Flag::CalibSelLevel => self.calib.sel[0],
+            Flag::CalibSelPid => self.calib.sel[1],
+            Flag::CalibSelVib => self.calib.sel[2],
+            Flag::CalibSelAll => self.calib.sel == [true; 3],
+            Flag::CalibRunning => self.calib.running,
+            Flag::CalibLevelActive => matches!(self.calib.level, Step::Running | Step::Done),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calibration_run() {
+        let mut c = Calib { sel: [true, true, true], ..Calib::default() };
+        c.begin();
+        assert_eq!((c.vib, c.pid, c.level), (Step::Running, Step::Waiting, Step::Waiting));
+        for e in [CalibEvent::VibStart, CalibEvent::VibStartX, CalibEvent::VibFinishX, CalibEvent::VibStartY, CalibEvent::VibFinishY, CalibEvent::VibFinish] {
+            c.event(e);
+        }
+        // PID never reports its end (G28 failed), the mesh fails
+        c.event(CalibEvent::PidStart);
+        c.event(CalibEvent::LevelStart);
+        c.event(CalibEvent::LevelError);
+        assert_eq!(c.level_progress(), 0.0);
+        c.end();
+        assert!(!c.running);
+        assert_eq!((c.vib, c.pid, c.level), (Step::Done, Step::Failed, Step::Failed));
+        assert!(c.level_error);
+    }
+
+    #[test]
+    fn vibration_error_codes() {
+        let mut c = Calib { sel: [false, false, true], ..Calib::default() };
+        c.begin();
+        c.event(CalibEvent::VibErrorY);
+        assert_eq!((c.vib, c.vib_error), (Step::Failed, 402));
+        c.begin();
+        assert_eq!((c.vib, c.vib_stage, c.vib_error), (Step::Running, 0, 0));
     }
 }

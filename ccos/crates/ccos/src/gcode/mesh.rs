@@ -53,6 +53,7 @@ use std::rc::Rc;
 
 use super::parse::{cpp_double, Abort, CmdResult, GCmd, Lim};
 use super::Exec;
+use crate::app::CalibEvent;
 use crate::config::Config;
 use crate::mesh::{self, Calibrate, MoveSplitter, ZMesh, DEFAULT_PROFILE, FADE_DISABLE};
 
@@ -800,8 +801,10 @@ impl Exec {
                     bm.results.push(pos);
                     let (n, total) = (bm.results.len(), bm.probe_points.len());
                     self.core().ui.lock().status = format!("Bed mesh: point {n} of {total} (z {:.3})", pos[2]);
+                    self.calib(CalibEvent::LevelPoint);
                 }
                 Err(e) => {
+                    self.calib(CalibEvent::LevelError);
                     // the stock code shuts the printer down on any probe error
                     if self.core().shutdown.is_none() {
                         self.invoke_shutdown(&format!("bed mesh probe error: {e}"));
@@ -825,6 +828,7 @@ impl Exec {
             }
             match { let p = self.bm().probe.clone(); self.probe_run(g, &p) } {
                 Ok(pos) => {
+                    self.calib(CalibEvent::LevelPoint);
                     let bm = self.bm();
                     bm.results.push(pos);
                     let last = bm.last_fast_z.get(i).copied().unwrap_or(0.0);
@@ -846,6 +850,7 @@ impl Exec {
                         return Err(e);
                     }
                     super::console("bed mesh probe error");
+                    self.calib(CalibEvent::LevelError);
                     return Ok(false);
                 }
             }
@@ -1088,11 +1093,13 @@ impl Exec {
         let bed = if g.has("S") { g.f("S", 60.0)? } else { 60.0 };
         let enable_z_home = self.core().m.strain_gauge.is_some_and(|s| s.enable_z_home);
         let test_mode = self.bm.as_ref().is_some_and(|b| b.auto_leveling_test_mode);
+        self.calib(CalibEvent::LevelStart);
         if !test_mode {
             if enable_z_home {
                 self.single("G29.1 P0");
             }
             self.single("M211 S0");
+            self.calib(CalibEvent::LevelPreheat);
             self.single("M104 S140");
             self.single(&format!("M140 S{bed:.2}"));
             self.single("M106 P1 S0");
@@ -1113,6 +1120,7 @@ impl Exec {
         self.single("G28 Z");
         self.single("M109 S140");
         self.single(&format!("M190 S{bed:.2}"));
+        self.calib(CalibEvent::LevelProbe);
         if self.bm.is_none() {
             return Err(Abort("G29 needs [bed_mesh]".into()));
         }
@@ -1126,6 +1134,7 @@ impl Exec {
             self.log("BED_MESH_CALIBRATE error");
             return Err(e);
         }
+        self.calib(CalibEvent::LevelFinish);
         self.single("G90");
         self.single("G1 X10 Y10 F4500");
         self.single("M106 S0");

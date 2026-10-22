@@ -69,6 +69,9 @@ pub fn console_lines() -> Vec<String> {
 pub enum Job {
     /// One or more lines (`\n`-separated), like the stock UI's command queue.
     Gcode(String),
+    /// The Calibrate screen's Start: lines like [`Job::Gcode`], then the
+    /// screen learns the run is over.
+    Calibrate(String),
     /// Print a file (`SDCARD_PRINT_FILE`).
     Print(PathBuf),
     /// Re-attach every MCU (after a shutdown).
@@ -674,6 +677,28 @@ impl Exec {
         self.wait_until("buffer space", |c| c.buffered_time() < crate::machine::BUFFER_TIME_HIGH && c.mcus.iter().flatten().all(|m| m.backlog() < 600))
     }
 
+    /// [`Job::Gcode`] / [`Job::Calibrate`].
+    fn run_job_lines(&mut self, text: &str, calibrate: bool) {
+        if !self.print.active {
+            self.ctl.cancel.store(false, Ordering::Relaxed);
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        self.run_script(&lines);
+        if !self.print.active {
+            self.core().flush_moves();
+        }
+        if calibrate {
+            let ui = self.core().ui.clone();
+            ui.lock().calib.end();
+        }
+    }
+
+    /// A stock calibration state for the Calibrate screen.
+    fn calib(&self, e: crate::app::CalibEvent) {
+        let ui = self.core().ui.clone();
+        ui.lock().calib.event(e);
+    }
+
     /// `gcode_move.reset_last_position`.
     fn reset_last_position(&mut self) {
         self.last = self.mesh_get_position();
@@ -846,16 +871,8 @@ impl Exec {
         let p = self.p.clone();
         p.lock().ui.lock().busy = true;
         match job {
-            Job::Gcode(text) => {
-                if !self.print.active {
-                    self.ctl.cancel.store(false, Ordering::Relaxed);
-                }
-                let lines: Vec<&str> = text.lines().collect();
-                self.run_script(&lines);
-                if !self.print.active {
-                    self.core().flush_moves();
-                }
-            }
+            Job::Gcode(text) => self.run_job_lines(&text, false),
+            Job::Calibrate(text) => self.run_job_lines(&text, true),
             Job::Print(path) => {
                 let line = format!("SDCARD_PRINT_FILE FILESLICE=4 FILENAME=\"{}\"", path.display());
                 self.single(&line);

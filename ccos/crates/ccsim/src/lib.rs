@@ -219,6 +219,8 @@ impl Emu {
             "shaper_freq_y" => Some(Val::Num(sh.freq_y)),
             "damping_x" => Some(Val::Num(sh.damping_x)),
             "damping_y" => Some(Val::Num(sh.damping_y)),
+            "pid_kp" => Some(Val::Num(c.cfgs.printer.get_double("extruder", "pid_Kp", 0.0))),
+            "platform_type" => Some(Val::Num(c.cfgs.sysconf.get_int("system", "print_platform_type", 0) as f64)),
             _ => None,
         }
     }
@@ -329,6 +331,15 @@ impl Emu {
             "mesh_page" => text(ccos::ui::Value::MeshPage),
             "mesh_state" => text(ccos::ui::Value::MeshState),
             "mesh_range" => text(ccos::ui::Value::MeshRange),
+            "calib_level" => text(ccos::ui::Value::CalibLevelState),
+            "calib_level_detail" => text(ccos::ui::Value::CalibLevelDetail),
+            "calib_pid" => text(ccos::ui::Value::CalibPidState),
+            "calib_pid_detail" => text(ccos::ui::Value::CalibPidDetail),
+            "calib_vib" => text(ccos::ui::Value::CalibVibState),
+            "calib_vib_detail" => text(ccos::ui::Value::CalibVibDetail),
+            "calib_plate" => text(ccos::ui::Value::CalibPlate),
+            "calib_start" => text(ccos::ui::Value::CalibStart),
+            "calib_progress" => num(s.calib.level_progress() as f64),
             "break_save" => num(self.rt.printer.lock().bs.path(0).is_some_and(|p| p.exists()) as u8 as f64),
             "powered" => num(self.powered as u8 as f64),
             "tmp_files" => {

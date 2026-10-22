@@ -568,6 +568,7 @@ impl Exec {
         let Some(at) = at else { return r };
         if r.is_err() || at.busy() {
             super::console("pid_calibrate interrupted");
+            self.calib(crate::app::CalibEvent::PidError);
             return r;
         }
         let max_power = self.core().heaters[h].cfg.max_power;
@@ -640,12 +641,20 @@ impl Exec {
     pub(super) fn cmd_pid_calibrate_nozzle(&mut self, g: &GCmd) -> CmdResult {
         let def = self.core().m.pid_extruder_temp;
         let t = g.get_double("TARGET_TEMP", def, Lim::min_max(180.0, 335.0))?;
+        self.calib(crate::app::CalibEvent::PidStart);
         if !self.g28_or_fail() {
             return Ok(());
         }
         let mv = self.pid_move_line();
-        for l in ["G90".to_string(), mv, "M106 S255".into(), "M109 S100".into(), format!("PID_CALIBRATE HEATER=extruder TARGET={}", cpp_to_string(t)), "M104 S0".into(), "M140 S0".into(), "M107".into(), "M18".into()] {
+        for l in ["G90".to_string(), mv, "M106 S255".into(), "M109 S100".into()] {
             self.single(&l);
+        }
+        self.calib(crate::app::CalibEvent::PidPreheatDone);
+        for l in [format!("PID_CALIBRATE HEATER=extruder TARGET={}", cpp_to_string(t)), "M104 S0".into(), "M140 S0".into(), "M107".into(), "M18".into()] {
+            self.single(&l);
+        }
+        if self.core().shutdown.is_none() {
+            self.calib(crate::app::CalibEvent::PidFinish);
         }
         Ok(())
     }

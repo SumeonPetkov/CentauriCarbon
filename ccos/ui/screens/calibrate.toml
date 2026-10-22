@@ -1,0 +1,144 @@
+# Calibration: the stock auto-level, PID, vibration and one-click pages on
+# one screen. Pick what to run, then Start; they run in the stock one-click
+# order (vibration, PID, auto-level). Each row follows the firmware's
+# progress states (src/app.rs `Calib`); the commands are handled in
+# src/runtime.rs.
+
+include = ["sidebar"]
+
+[[widget]]
+type = "label"
+at = [76, 6, 180, 24]
+text = "Calibration"
+font = "bold"
+
+[[widget]]
+type = "label"
+at = [260, 8, 210, 22]
+text = "Select, then Start"
+font = "small"
+color = "dim"
+align = "right"
+
+# ---- auto-level (G29) ----
+# The texts run under the buttons on the right, which hide during a run.
+
+[[widget]]
+type = "toggle"
+at = [72, 34, 128, 54]
+text = "Auto-level"
+on_if = "calib_sel_level"
+bg = "pressed"
+tap = "calib_toggle_level"
+
+[[widget]]
+type = "label"
+at = [208, 36, 266, 22]
+value = "calib_level_state"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [208, 58, 266, 22]
+value = "calib_level_detail"
+font = "small"
+color = "dim"
+
+[[widget]]
+type = "bar"
+at = [208, 82, 172, 4]
+value = "calib_level_progress"
+show_if = "calib_level_active"
+
+# the stock plate choice (sysconf print_platform_type, BED_MESH_SET_INDEX)
+[[widget]]
+type = "button"
+at = [386, 38, 88, 46]
+value = "calib_plate"
+font = "small"
+tap = "calib_plate"
+show_if = "!calib_running"
+
+# ---- PID tuning (PID_CALIBRATE_NOZZLE) ----
+
+[[widget]]
+type = "toggle"
+at = [72, 94, 128, 54]
+text = "PID tuning"
+on_if = "calib_sel_pid"
+bg = "pressed"
+tap = "calib_toggle_pid"
+
+[[widget]]
+type = "label"
+at = [208, 96, 266, 22]
+value = "calib_pid_state"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [208, 118, 266, 22]
+value = "calib_pid_detail"
+font = "small"
+color = "dim"
+
+[[widget]]
+type = "button"
+at = [386, 98, 41, 46]
+text = "−"
+tap = "calib_pid_down"
+show_if = "!calib_running"
+
+[[widget]]
+type = "button"
+at = [433, 98, 41, 46]
+text = "+"
+tap = "calib_pid_up"
+show_if = "!calib_running"
+
+# ---- vibration (SHAPER_CALIBRATE_SCRIPT) ----
+
+[[widget]]
+type = "toggle"
+at = [72, 154, 128, 54]
+text = "Vibration"
+on_if = "calib_sel_vib"
+bg = "pressed"
+tap = "calib_toggle_vib"
+
+[[widget]]
+type = "label"
+at = [208, 156, 266, 22]
+value = "calib_vib_state"
+font = "small"
+
+[[widget]]
+type = "label"
+at = [208, 178, 266, 22]
+value = "calib_vib_detail"
+font = "small"
+color = "dim"
+
+# ---- run ----
+
+[[widget]]
+type = "toggle"
+at = [72, 216, 128, 50]
+text = "Select all"
+on_if = "calib_sel_all"
+bg = "pressed"
+tap = "calib_toggle_all"
+
+[[widget]]
+type = "label"
+at = [208, 216, 172, 50]
+value = "status"
+font = "small"
+color = "dim"
+
+[[widget]]
+type = "button"
+at = [386, 216, 88, 50]
+value = "calib_start"
+font = "small"
+tap = "calib_start"

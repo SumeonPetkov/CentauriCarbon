@@ -33,6 +33,7 @@
 use super::parse::{cpp_double, parse, stod, Abort, CmdResult, GCmd, Lim};
 use super::Exec;
 use crate::accel::Results;
+use crate::app::CalibEvent;
 use crate::clock::now;
 use crate::resonance::{self, CalibrationData};
 
@@ -124,13 +125,20 @@ impl Exec {
 
     pub(super) fn cmd_shaper_calibrate_script(&mut self) -> CmdResult {
         self.cmd_measure_axes_noise(&parse("MEASURE_AXES_NOISE").expect("command"))?;
+        self.calib(CalibEvent::VibStart);
         self.single("G28");
         if self.core().homed != [true; 3] {
             self.log("G28 failed");
             return Ok(());
         }
+        self.calib(CalibEvent::VibStartX);
         self.cmd_shaper_calibrate(&parse("SHAPER_CALIBRATE AXIS=x").expect("command"))?;
-        self.cmd_shaper_calibrate(&parse("SHAPER_CALIBRATE AXIS=y").expect("command"))
+        self.calib(CalibEvent::VibFinishX);
+        self.calib(CalibEvent::VibStartY);
+        self.cmd_shaper_calibrate(&parse("SHAPER_CALIBRATE AXIS=y").expect("command"))?;
+        self.calib(CalibEvent::VibFinishY);
+        self.calib(CalibEvent::VibFinish);
+        Ok(())
     }
 
     pub(super) fn cmd_measure_axes_noise(&mut self, g: &GCmd) -> CmdResult {
@@ -138,6 +146,7 @@ impl Exec {
         let chips = self.resonance_chips()?;
         for (_, a) in &chips {
             if !matches!(self.adxl_start(a, None, meas_time as i64)?, Ok(true)) {
+                self.calib(CalibEvent::VibErrorX);
                 return Err(Abort("resonance_tester error".into()));
             }
         }
@@ -201,6 +210,11 @@ impl Exec {
                 let measure_time = resonance::run_test_time(freq_start, freq_end, hz) as i64;
                 for (chip_axes, a) in &chips {
                     if axis.matches(chip_axes) && !matches!(self.adxl_start(a, None, measure_time + 20)?, Ok(true)) {
+                        match axis.name.as_str() {
+                            "x" => self.calib(CalibEvent::VibErrorX),
+                            "y" => self.calib(CalibEvent::VibErrorY),
+                            _ => {}
+                        }
                         return Err(Abort("resonance_tester error".into()));
                     }
                 }
@@ -290,6 +304,10 @@ impl Exec {
             "x" => self.single(&format!("SET_INPUT_SHAPER SHAPER_TYPE_X={name} SHAPER_FREQ_X={freq:.2}")),
             "y" => self.single(&format!("SET_INPUT_SHAPER SHAPER_TYPE_Y={name} SHAPER_FREQ_Y={freq:.2}")),
             _ => {}
+        }
+        {
+            let ui = self.core().ui.clone();
+            ui.lock().calib.shaper[(axis == "y") as usize] = (name.to_string(), freq);
         }
         self.respond(&format!("shaper name = {name}"));
         self.respond(&format!("shaper freq = {}", to_string(freq)));

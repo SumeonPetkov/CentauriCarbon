@@ -95,3 +95,8 @@ fn all_scripts_listed() {
         }
     }
 }
+
+#[test]
+fn calibrate_screen() {
+    run("14_calibration.ccsim");
+}

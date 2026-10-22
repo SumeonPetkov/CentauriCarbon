@@ -54,7 +54,15 @@ impl Runtime {
             None => crate::config::Configs::stock(),
         };
         let printer = Printer::new(hw, cfgs, ui.clone());
-        ui.lock().power_resume = printer.lock().bs.enable;
+        {
+            let p = printer.lock();
+            let mut s = ui.lock();
+            s.power_resume = p.bs.enable;
+            s.calib.plate_b = p.cfgs.sysconf.get_int("system", "print_platform_type", 0) == 1;
+            let c = &p.cfgs.printer;
+            let ty = |k: &str| c.get_string("input_shaper", k, &c.get_string("input_shaper", "shaper_type", "mzv"));
+            s.calib.shaper = [(ty("shaper_type_x"), c.get_double("input_shaper", "shaper_freq_x", 0.0)), (ty("shaper_type_y"), c.get_double("input_shaper", "shaper_freq_y", 0.0))];
+        }
         let ctl = Arc::new(Control::default());
         let (tx, rx) = std::sync::mpsc::channel();
         let p1 = printer.clone();
@@ -195,6 +203,24 @@ impl Runtime {
                     }
                 }
             }
+            Cmd::CalibToggleLevel | Cmd::CalibTogglePid | Cmd::CalibToggleVib | Cmd::CalibToggleAll | Cmd::CalibPidDown | Cmd::CalibPidUp => {
+                let mut s = self.ui.lock();
+                let k = &mut s.calib;
+                if !k.running {
+                    match c {
+                        Cmd::CalibToggleLevel => k.sel[0] = !k.sel[0],
+                        Cmd::CalibTogglePid => k.sel[1] = !k.sel[1],
+                        Cmd::CalibToggleVib => k.sel[2] = !k.sel[2],
+                        Cmd::CalibToggleAll => k.sel = [k.sel != [true; 3]; 3],
+                        // the stock PID page: 190-320 °C in steps of 10
+                        Cmd::CalibPidDown if k.pid_temp > 190 => k.pid_temp -= 10,
+                        Cmd::CalibPidUp if k.pid_temp < 320 => k.pid_temp += 10,
+                        _ => {}
+                    }
+                }
+            }
+            Cmd::CalibPlate => self.calib_plate(),
+            Cmd::CalibStart => self.calib_start(),
             Cmd::TogglePowerResume => {
                 let mut p = self.printer.lock();
                 p.bs.enable = !p.bs.enable;
@@ -208,6 +234,58 @@ impl Runtime {
             }
         }
         None
+    }
+
+    /// The stock auto-level plate choice: sysconf `print_platform_type`
+    /// and the matching mesh (`BED_MESH_SET_INDEX TYPE=… INDEX=0`).
+    fn calib_plate(&mut self) {
+        if self.ui.lock().calib.running || self.busy_printing() {
+            return;
+        }
+        let b = {
+            let mut s = self.ui.lock();
+            s.calib.plate_b = !s.calib.plate_b;
+            s.calib.plate_b
+        };
+        {
+            let mut p = self.printer.lock();
+            p.cfgs.sysconf.set_int("system", "print_platform_type", b as i64);
+            if let Some(path) = p.cfgs.path("sysconf.cfg") {
+                let _ = p.cfgs.sysconf.write(&path);
+            }
+        }
+        let ty = if b { "enhancement" } else { "standard" };
+        self.send(Job::Gcode(format!("BED_MESH_SET_INDEX TYPE={ty} INDEX=0")));
+    }
+
+    /// Start: the selected calibrations in the stock one-click order.
+    fn calib_start(&mut self) {
+        if self.ui.lock().calib.running {
+            return;
+        }
+        if self.busy_printing() {
+            self.ui.set_status("Busy printing");
+            return;
+        }
+        let mut s = self.ui.lock();
+        let c = &mut s.calib;
+        let mut lines = Vec::new();
+        if c.sel[2] {
+            lines.push("SHAPER_CALIBRATE_SCRIPT".to_string());
+        }
+        if c.sel[1] {
+            lines.push(format!("PID_CALIBRATE_NOZZLE TARGET_TEMP={}", c.pid_temp));
+        }
+        if c.sel[0] {
+            lines.push("G29".to_string());
+        }
+        if lines.is_empty() {
+            s.set_status("Select what to calibrate");
+            return;
+        }
+        c.begin();
+        drop(s);
+        self.send(Job::Calibrate(lines.join("\n")));
     }
 
     /// Start printing the `i`-th listed file.

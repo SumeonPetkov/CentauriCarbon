@@ -1,29 +1,37 @@
-# Bring-up tools for the three MCUs.
+# Calibration, and bring-up tools for the three MCUs.
 
 include = ["sidebar"]
 
 [[widget]]
 type = "label"
 at = [76, 6, 300, 24]
-text = "MCU tools"
+text = "Tools"
 font = "bold"
 
 [[widget]]
 type = "button"
-at = [72, 36, 132, 52]
+at = [72, 36, 96, 52]
+text = "Calibrate"
+font = "small"
+tap = "goto calibrate"
+
+[[widget]]
+type = "button"
+at = [174, 36, 96, 52]
 text = "Probe all"
+font = "small"
 tap = "probe"
 
 [[widget]]
 type = "button"
-at = [210, 36, 132, 52]
-text = "Reset toolhead"
+at = [276, 36, 96, 52]
+text = "Reset head"
 font = "small"
 tap = "reset_toolhead"
 
 [[widget]]
 type = "button"
-at = [348, 36, 126, 52]
+at = [378, 36, 96, 52]
 text = "Restart all"
 font = "small"
 tap = "restart"
