@@ -17,6 +17,7 @@
 
 pub mod parse;
 
+mod bedcheck;
 mod breaksave;
 mod cmds;
 mod home;
@@ -24,6 +25,7 @@ mod loadcell;
 mod mesh;
 mod para;
 mod print;
+mod probe;
 mod tmc;
 
 use std::collections::HashMap;
@@ -143,6 +145,8 @@ pub struct Exec {
     tmc: Vec<crate::tmc::Tmc>,
     /// What the last load-cell probe found.
     sg: loadcell::SgVals,
+    /// `[probe]` results (`PROBE`, `PROBE_CALIBRATE`).
+    probe: probe::ProbeState,
     /// What the last power-loss save held (`s_saved_print_para`).
     bsp: breaksave::Saved,
 }
@@ -301,24 +305,13 @@ pub const COMMANDS: &[&str] = &[
 ];
 
 /// Commands that exist on the printer but whose subsystem ccos does not
-/// have yet (load-cell probing, accelerometer). They are accepted and logged.
+/// have yet (the accelerometer). They are accepted and logged.
 pub const NOT_YET: &[(&str, &str)] = &[
     ("ACCELEROMETER_MEASURE_X", "accelerometer"),
     ("ACCELEROMETER_QUERY_X", "accelerometer"),
     ("ADXL345_DEBUG_READ_X", "accelerometer"),
     ("ADXL345_DEBUG_WRITE_X", "accelerometer"),
-    ("CALIBRATE_Z_OFFSET", "load-cell probing"),
-    ("CHECK_BED_MESH", "load-cell probing"),
-    ("HOME_ACCURACY", "load-cell probing"),
-    ("LIFT_HOT_BED", "load-cell probing"),
     ("MEASURE_AXES_NOISE", "accelerometer"),
-    ("MEASURE_GAP_TEST", "load-cell probing"),
-    ("NOZZLE_CLEAR", "load-cell probing"),
-    ("PROBE", "load-cell probing"),
-    ("PROBE_ACCURACY", "load-cell probing"),
-    ("PROBE_CALIBRATE", "load-cell probing"),
-    ("PRTOUCH_READY", "load-cell probing"),
-    ("QUERY_PROBE", "load-cell probing"),
     ("SHAPER_CALIBRATE", "accelerometer"),
     ("SHAPER_CALIBRATE_SCRIPT", "accelerometer"),
     ("TEST_RESONANCES", "accelerometer"),
@@ -355,6 +348,7 @@ impl Exec {
             reported: Default::default(),
             tmc,
             sg: Default::default(),
+            probe: Default::default(),
             bsp: Default::default(),
         }
     }
@@ -410,6 +404,12 @@ impl Exec {
         }
         if self.loadcell_handles(&key) {
             return self.cmd_loadcell(&key, g);
+        }
+        if self.bedcheck_handles(&key) {
+            return self.cmd_bedcheck(&key, g);
+        }
+        if self.probe_handles(&key) {
+            return self.cmd_probe(&key, g);
         }
         if self.mesh_handles(&key) {
             return self.cmd_mesh(&key, g);

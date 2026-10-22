@@ -47,6 +47,10 @@ pub(super) struct SgVals {
     pub end_z_mm: f64,
     /// Bed-mesh taps since the last load-cell Z homing (a shake every 12).
     pub g29_cnt: i32,
+    /// `_probe_times` repeats (diagnostics).
+    pub re_probe_cnt: i32,
+    /// `CHECK_BED_MESH` makes the next `PRTOUCH_READY` do nothing.
+    pub jump_probe_ready: bool,
 }
 
 /// `ck_sys_sta`: neither the load-cell board nor the DSP is shut down or
@@ -65,7 +69,7 @@ const RESENDS: u32 = 50;
 type Probe = (i32, f64, bool);
 
 impl Exec {
-    fn sg_cfg(&self) -> Option<StrainGaugeCfg> {
+    pub(super) fn sg_cfg(&self) -> Option<StrainGaugeCfg> {
         self.core().m.strain_gauge
     }
 
@@ -97,11 +101,11 @@ impl Exec {
 
     /// `ck_sys_sta`: neither the load-cell board nor the DSP is shut down
     /// or gone.
-    fn ck_sys_sta(&self) -> bool {
+    pub(super) fn ck_sys_sta(&self) -> bool {
         sys_ok(&self.core())
     }
 
-    fn sg_send(&self, target: Target, name: &str, args: &[(&str, Arg<'_>)]) -> CmdResult {
+    pub(super) fn sg_send(&self, target: Target, name: &str, args: &[(&str, Arg<'_>)]) -> CmdResult {
         let mut c = self.core();
         let m = c.mcu(target)?;
         let msg = m.encode(name, args);
@@ -119,7 +123,7 @@ impl Exec {
     }
 
     /// Sleep like `usleep`, ending early on a shutdown.
-    fn sg_sleep(&self, secs: f64) -> CmdResult {
+    pub(super) fn sg_sleep(&self, secs: f64) -> CmdResult {
         match self.p.wait(secs, "load cell", |c| (c.shutdown.is_some() || c.exit).then_some(())) {
             Ok(()) => Err(Abort(self.core().shutdown.clone().unwrap_or_else(|| "exit".into()))),
             Err(_) => Ok(()),
@@ -147,7 +151,7 @@ impl Exec {
     }
 
     /// `HX711S::ProbeCheckTriggerStart` (always with the ack).
-    fn trigger_start(&self, x: i32, y: i32, z: i32) -> CmdResult {
+    pub(super) fn trigger_start(&self, x: i32, y: i32, z: i32) -> CmdResult {
         self.sg_sleep(0.0005)?;
         {
             let c = self.core();
@@ -170,7 +174,7 @@ impl Exec {
     }
 
     /// `HX711S::ProbeCheckTriggerStop`.
-    fn trigger_stop(&self, ack: bool) -> CmdResult {
+    pub(super) fn trigger_stop(&self, ack: bool) -> CmdResult {
         if !self.ck_sys_sta() {
             return Ok(());
         }
@@ -210,7 +214,7 @@ impl Exec {
     }
 
     /// `DirZCtl::check_and_run`.
-    fn dirz_run(&mut self, direct: i64, step_us: u32, step_cnt: u32, wait_finish: bool) -> CmdResult {
+    pub(super) fn dirz_run(&mut self, direct: i64, step_us: u32, step_cnt: u32, wait_finish: bool) -> CmdResult {
         if !self.ck_sys_sta() {
             return Ok(());
         }
@@ -235,7 +239,7 @@ impl Exec {
     }
 
     /// `(Z step distance × step_base)`: one dirzctl step in mm.
-    fn dirz_step_mm(&self) -> f64 {
+    pub(super) fn dirz_step_mm(&self) -> f64 {
         let c = self.core();
         c.m.steppers[2].step_dist * c.m.dirzctl_step_base.unwrap_or(2.0)
     }
@@ -352,7 +356,7 @@ impl Exec {
     }
 
     /// `_move`: manual_move then wait_moves.
-    fn sg_move(&mut self, pos: [Option<f64>; 4], speed: f64) -> CmdResult {
+    pub(super) fn sg_move(&mut self, pos: [Option<f64>; 4], speed: f64) -> CmdResult {
         self.manual_move(pos, speed)?;
         self.wait_moves()
     }

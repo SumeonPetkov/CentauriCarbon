@@ -112,9 +112,12 @@ end-to-end tests ([09](09-emulator.md)); what remains open in them is noted.
        and a Bed mesh screen that shows the saved profiles.
      - Tested against the emulator with a tilted, domed bed; not yet on a
        printer.
-   - Still to do: `CHECK_BED_MESH`, `PRTOUCH_READY`, `MEASURE_GAP_TEST`,
-     `NOZZLE_CLEAR`, `LIFT_HOT_BED`, `HOME_ACCURACY`,
-     `CALIBRATE_Z_OFFSET` and the `PROBE*` commands.
+   - 🟡 Done: the remaining probe commands (`gcode/probe.rs`,
+     `gcode/bedcheck.rs`): `PROBE`, `PROBE_ACCURACY`, `HOME_ACCURACY`,
+     `PROBE_CALIBRATE`, `QUERY_PROBE`, `CALIBRATE_Z_OFFSET`,
+     `LIFT_HOT_BED`, `PRTOUCH_READY`, `CHECK_BED_MESH`,
+     `MEASURE_GAP_TEST`, `NOZZLE_CLEAR`. Tested in the emulator
+     (`12_probe`), not yet on a printer.
 9. ✅ **G-code interpreter** (`gcode/`, `config.rs`): a port of the stock
    one. It has the same parser, the full command set the Centauri Carbon
    loads, and the same defaults, range checks and internal scripts (G28,

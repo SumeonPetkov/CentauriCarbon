@@ -106,6 +106,15 @@ pub struct StrainGaugeCfg {
     pub g29_speed: f64,
     /// Probes go down at most Z − this (it is negative).
     pub g29_max_detection: f64,
+    // PRTOUCH_READY, CHECK_BED_MESH, MEASURE_GAP_TEST
+    pub base_count: i64,
+    /// Integer in the stock code; the stock printer.cfg's 20 is clamped to 10.
+    pub bed_max_err: i64,
+    pub g29_rdy_speed: f64,
+    pub shake_cnt: i64,
+    pub need_measure_gap: bool,
+    pub gap_dis_range: f64,
+    pub check_bed_mesh_max_err: f64,
 }
 
 impl StrainGaugeCfg {
@@ -131,6 +140,13 @@ impl StrainGaugeCfg {
             self_z_offset: c.get_double(S, "self_z_offset", 0.0),
             g29_speed: c.get_double(S, "g29_speed", 2.0),
             g29_max_detection: c.get_double(S, "g29_max_detection", -5.0),
+            base_count: c.get_int_clamped(S, "base_count", 40, 10, 100),
+            bed_max_err: c.get_int_clamped(S, "bed_max_err", 2, 2, 10),
+            g29_rdy_speed: c.get_double(S, "g29_rdy_speed", 2.5),
+            shake_cnt: c.get_int_clamped(S, "shake_cnt", 4, 1, 512),
+            need_measure_gap: c.get_bool(S, "need_measure_gap", true),
+            gap_dis_range: c.get_double(S, "gap_dis_range", 0.6),
+            check_bed_mesh_max_err: c.get_double(S, "check_bed_mesh_max_err", 0.2),
         })
     }
 }

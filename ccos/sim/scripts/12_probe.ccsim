@@ -1,0 +1,111 @@
+# The rest of the load-cell commands, as the stock firmware runs them:
+# PROBE / PROBE_ACCURACY / HOME_ACCURACY ([probe], [bed_mesh_probe]),
+# PRTOUCH_READY, CHECK_BED_MESH, MEASURE_GAP_TEST, LIFT_HOT_BED,
+# PROBE_CALIBRATE and CALIBRATE_Z_OFFSET.
+option speed 3
+option config bed_mesh probe_count 3,3
+wait_until links == 3 timeout 20
+gcode G28
+wait_until homed == "xyz" timeout 90
+wait_until busy == 0 timeout 60
+gcode G1 X128 Y128 Z5 F3000
+# PROBE: [probe] samples 2 (taps with run_G29_Z, which comes back up)
+gcode PROBE
+wait 1
+wait_until busy == 0 timeout 120
+wait 0.3
+expect console ~ "run G29 Z use probe_by_step"
+expect console ~ "probe_by_step trigger!!!"
+expect host_z > 4.999
+expect host_z < 5.001
+# PROBE_ACCURACY goes to Z0 first, then taps without lifting
+gcode PROBE_ACCURACY SAMPLES=3
+wait 1
+wait_until busy == 0 timeout 120
+wait 0.3
+expect console ~ "PROBE_ACCURACY at X:128.000 Y:128.000 Z:0.000 (samples=3"
+expect console ~ "probe accuracy results: maximum"
+expect console ~ "standard deviation 0.000000"
+gcode HOME_ACCURACY SAMPLES=2
+wait 1
+wait_until busy == 0 timeout 120
+wait 0.3
+expect console ~ "(samples=2 retract=2.000 speed=3.0 lift_speed=6.0)"
+# these two do nothing on the printer
+gcode QUERY_PROBE
+gcode NOZZLE_CLEAR
+wait 0.3
+expect console !~ "not available in ccos yet"
+# PRTOUCH_READY taps the four mesh corners from Z bed_max_err + 1 = 11 (the
+# stock 20 is clamped to 10), at most 10 mm down: the bed at Z0 is never
+# reached, so every corner reads 0, as on the printer
+gcode PRTOUCH_READY
+wait 1
+wait_until busy == 0 timeout 300
+wait 0.3
+expect console ~ "RDY_POS = [00=0, 01=0, 11=0, 10=0]"
+expect console ~ "GAP_POS = [00=0.1, 01=0.1, 11=0.1, 10=0.1]"
+# no mesh yet: nothing to check
+gcode CHECK_BED_MESH
+wait 0.5
+wait_until busy == 0 timeout 10
+expect console ~ "The bed_mesh data is invalid and cannot be verified."
+gcode BED_MESH_CALIBRATE
+wait 1
+wait_until busy == 0 timeout 300
+wait 0.3
+expect mesh_state == "In use"
+gcode ECHO before check
+gcode CHECK_BED_MESH
+wait 1
+wait_until busy == 0 timeout 300
+# the check skips the next PRTOUCH_READY
+gcode PRTOUCH_READY
+gcode ECHO after skip
+wait 0.5
+wait_until busy == 0 timeout 10
+expect console ~ "after skip"
+expect mesh_state == "In use"
+# MEASURE_GAP_TEST: the board sends no samples, so every gap reads 0
+gcode MEASURE_GAP_TEST INDEX=9
+wait 0.3
+expect console ~ "MEASURE_GAP_TEST: INDEX=9 is not 0 to 3"
+gcode MEASURE_GAP_TEST INDEX=1
+wait 1
+wait_until busy == 0 timeout 300
+wait 0.3
+expect console ~ "Gap measure vals = 0 0 0 0 0 "
+expect host_z > 10.999
+expect host_z < 11.001
+# LIFT_HOT_BED: Z down (the bed up) until the load cells feel it, then 5 mm
+# back; Z is unhomed after
+gcode G1 X128 Y128 F6000
+gcode LIFT_HOT_BED S=20
+wait 1
+wait_until busy == 0 timeout 60
+wait 0.3
+expect console ~ "抬升中 probe_by_step trigger!!!"
+expect homed == "xy"
+expect gap > 4.5
+expect gap < 5.6
+# PROBE_CALIBRATE takes the probed Z as the new offset at once
+gcode G28
+wait 1
+wait_until homed == "xyz" timeout 90
+wait_until busy == 0 timeout 60
+gcode G1 X128 Y128 Z5 F3000
+gcode PROBE_CALIBRATE
+wait 1
+wait_until busy == 0 timeout 120
+wait 0.3
+expect console ~ "PrinterProbe cmd_PROBE_CALIBRATE Result is z="
+expect console ~ "probe_calibrate_finalize: z_offset:"
+# CALIBRATE_Z_OFFSET: G28 Z with position_endstop 0, G1 Z5, PROBE
+gcode CALIBRATE_Z_OFFSET
+wait 1
+wait_until busy == 0 timeout 180
+wait 0.3
+expect homed == "xyz"
+expect lost_steps == 0
+expect mcu_shutdown == "none"
+expect shutdown == "none"

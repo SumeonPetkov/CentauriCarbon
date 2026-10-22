@@ -73,6 +73,11 @@ fn power_loss_resume() {
     run("11_power_loss.ccsim");
 }
 
+#[test]
+fn probe_commands() {
+    run("12_probe.ccsim");
+}
+
 /// Every script file has a test above.
 #[test]
 fn all_scripts_listed() {

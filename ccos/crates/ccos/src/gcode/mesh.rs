@@ -56,46 +56,46 @@ use super::Exec;
 use crate::config::Config;
 use crate::mesh::{self, Calibrate, MoveSplitter, ZMesh, DEFAULT_PROFILE, FADE_DISABLE};
 
-/// `[bed_mesh_probe]` (`PrinterProbe`), with Define_reference.h defaults.
+/// `[bed_mesh_probe]` or `[probe]` (`PrinterProbe`), with
+/// Define_reference.h defaults.
 #[derive(Debug, Clone)]
 pub(super) struct ProbeCfg {
-    speed: f64,
-    lift_speed: f64,
-    x_offset: f64,
-    y_offset: f64,
-    samples: i64,
-    edge_samples: i64,
-    edge_compensation: f64,
-    sample_retract_dist: f64,
-    samples_result: String,
-    samples_tolerance: f64,
-    samples_tolerance_step: f64,
-    edge_samples_tolerance: f64,
-    edge_samples_tolerance_step: f64,
-    fast_threshold: f64,
-    samples_retries: i64,
+    pub speed: f64,
+    pub lift_speed: f64,
+    pub x_offset: f64,
+    pub y_offset: f64,
+    pub samples: i64,
+    pub edge_samples: i64,
+    pub edge_compensation: f64,
+    pub sample_retract_dist: f64,
+    pub samples_result: String,
+    pub samples_tolerance: f64,
+    pub samples_tolerance_step: f64,
+    pub edge_samples_tolerance: f64,
+    pub edge_samples_tolerance_step: f64,
+    pub fast_threshold: f64,
+    pub samples_retries: i64,
 }
 
 impl ProbeCfg {
-    fn from_config(c: &Config) -> Self {
-        const S: &str = "bed_mesh_probe";
-        let speed = c.get_double(S, "speed", 5.0);
+    pub(super) fn from_config(c: &Config, section: &str) -> Self {
+        let speed = c.get_double(section, "speed", 5.0);
         Self {
             speed,
-            lift_speed: c.get_double(S, "lift_speed", speed),
-            x_offset: c.get_double(S, "x_offset", 0.0),
-            y_offset: c.get_double(S, "y_offset", 0.0),
-            samples: c.get_int(S, "samples", 2),
-            edge_samples: c.get_int(S, "edge_samples", 2),
-            edge_compensation: c.get_double(S, "edge_compensation", 0.0),
-            sample_retract_dist: c.get_double(S, "sample_retract_dist", 5.0),
-            samples_result: c.get_string(S, "samples_result", "average"),
-            samples_tolerance: c.get_double(S, "samples_tolerance", 0.1),
-            samples_tolerance_step: c.get_double(S, "samples_tolerance_step", 0.005),
-            edge_samples_tolerance: c.get_double(S, "edge_samples_tolerance", 0.03),
-            edge_samples_tolerance_step: c.get_double(S, "edge_samples_tolerance_step", 0.005),
-            fast_threshold: c.get_double(S, "fast_autoleveling_threshold", 0.01),
-            samples_retries: c.get_int(S, "samples_tolerance_retries", 2),
+            lift_speed: c.get_double(section, "lift_speed", speed),
+            x_offset: c.get_double(section, "x_offset", 0.0),
+            y_offset: c.get_double(section, "y_offset", 0.0),
+            samples: c.get_int(section, "samples", 2),
+            edge_samples: c.get_int(section, "edge_samples", 2),
+            edge_compensation: c.get_double(section, "edge_compensation", 0.0),
+            sample_retract_dist: c.get_double(section, "sample_retract_dist", 5.0),
+            samples_result: c.get_string(section, "samples_result", "average"),
+            samples_tolerance: c.get_double(section, "samples_tolerance", 0.1),
+            samples_tolerance_step: c.get_double(section, "samples_tolerance_step", 0.005),
+            edge_samples_tolerance: c.get_double(section, "edge_samples_tolerance", 0.03),
+            edge_samples_tolerance_step: c.get_double(section, "edge_samples_tolerance_step", 0.005),
+            fast_threshold: c.get_double(section, "fast_autoleveling_threshold", 0.01),
+            samples_retries: c.get_int(section, "samples_tolerance_retries", 2),
         }
     }
 }
@@ -158,7 +158,7 @@ impl BedMesh {
         if probe_points.len() < 3 {
             super::console("Need at least %d probe points for bed_mesh");
         }
-        let probe = ProbeCfg::from_config(c);
+        let probe = ProbeCfg::from_config(c, "bed_mesh_probe");
         Some(Box::new(Self {
             horizontal_move_z: c.get_double(S, "horizontal_move_z", 5.0),
             fade_start: if disabled { FADE_DISABLE } else { fade_start },
@@ -794,7 +794,7 @@ impl Exec {
             if self.move_next(0)? {
                 break;
             }
-            match self.probe_run(g) {
+            match { let p = self.bm().probe.clone(); self.probe_run(g, &p) } {
                 Ok(pos) => {
                     let bm = self.bm();
                     bm.results.push(pos);
@@ -823,7 +823,7 @@ impl Exec {
                 super::console("_fast_probe_start move done.............");
                 return Ok(true);
             }
-            match self.probe_run(g) {
+            match { let p = self.bm().probe.clone(); self.probe_run(g, &p) } {
                 Ok(pos) => {
                     let bm = self.bm();
                     bm.results.push(pos);
@@ -962,8 +962,7 @@ impl Exec {
     // ---- PrinterProbe (bed_mesh_probe) ----
 
     /// `PrinterProbe::run_probe`: tap until `samples` taps agree.
-    fn probe_run(&mut self, g: &GCmd) -> Result<[f64; 3], Abort> {
-        let p = self.bm().probe.clone();
+    pub(super) fn probe_run(&mut self, g: &GCmd, p: &ProbeCfg) -> Result<[f64; 3], Abort> {
         g.get_double("LIFT_SPEED", p.lift_speed, Lim::above(0.0))?;
         let mut sample_count = g.get_int("SAMPLES", p.samples, Some(1), None)?;
         g.get_double("SAMPLE_RETRACT_DIST", p.sample_retract_dist, Lim::above(0.0))?;
@@ -1033,7 +1032,7 @@ impl Exec {
     /// `StrainGaugeWrapper::run_G29_Z` (`probing_move`): one tap down from
     /// here with the load cells; Z comes back up. [x, y, z at the press,
     /// where Z stopped].
-    fn run_g29_z(&mut self) -> Result<[f64; 4], Abort> {
+    pub(super) fn run_g29_z(&mut self) -> Result<[f64; 4], Abort> {
         let Some(cfg) = self.core().m.strain_gauge else {
             return Err(Abort("bed mesh probing needs the load cells ([strain_gauge])".into()));
         };
@@ -1168,6 +1167,19 @@ impl Exec {
     }
 
     /// The mesh in use, for `WIPE_NOZZLE` (which turns it off meanwhile).
+    /// `m_bmc->m_mesh_min` / `m_mesh_max`; `orig`: as configured (what
+    /// `StrainGaugeWrapper::_handle_mcu_identify` saw).
+    pub(super) fn mesh_area(&self, orig: bool) -> Option<([f64; 2], [f64; 2])> {
+        let b = &self.bm.as_ref()?.bmc;
+        let (lo, hi) = if orig { (&b.orig.mesh_min, &b.orig.mesh_max) } else { (&b.mesh_min, &b.mesh_max) };
+        Some(([*lo.first()?, *lo.get(1)?], [*hi.first()?, *hi.get(1)?]))
+    }
+
+    /// `m_z_mesh->calc_z` with the mesh in use.
+    pub(super) fn mesh_calc_z(&self, x: f64, y: f64) -> Option<f64> {
+        self.bm.as_ref()?.z_mesh.as_ref().map(|m| m.calc_z(x, y))
+    }
+
     pub(super) fn take_mesh(&mut self) -> Option<Rc<ZMesh>> {
         let m = self.bm.as_ref().and_then(|b| b.z_mesh.clone());
         self.set_mesh(None);

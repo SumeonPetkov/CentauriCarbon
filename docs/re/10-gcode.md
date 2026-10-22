@@ -64,7 +64,8 @@ Exactly `gcode.cpp`:
 | Moves | G0 G1 G2 G3 G4 G17 G18 G19 G20 G21 G90 G91 G92 M82 M83 M114 M220 M221 GET_POSITION SET_GCODE_OFFSET SAVE_GCODE_STATE RESTORE_GCODE_STATE MANUAL_MOVE |
 | Toolhead | M204 M211 M222 M223 M400 SET_VELOCITY_LIMIT RESET_PRINTER_PARAM M18 M84 SET_STEPPER_ENABLE STEPPER_BUZZ |
 | Homing | G28 CUSTOM_ZERO Z_AXIS_OFF_LIMIT_ACTION |
-| Load cells | STRAINGAUGE_Z_HOME STRAINGAUGE_TEST DIRZCTL READ_HX711 |
+| Load cells | STRAINGAUGE_Z_HOME STRAINGAUGE_TEST DIRZCTL READ_HX711 PRTOUCH_READY CHECK_BED_MESH MEASURE_GAP_TEST NOZZLE_CLEAR |
+| Probe | PROBE QUERY_PROBE PROBE_ACCURACY HOME_ACCURACY PROBE_CALIBRATE CALIBRATE_Z_OFFSET LIFT_HOT_BED |
 | TMC2209 | SET_TMC_CURRENT_stepper_x/_y/_z/_extruder INIT_TMC SET_TMC_FIELD DUMP_TMC |
 | Extruder | SET_PRESSURE_ADVANCE M900 SET_EXTRUDER_STEP_DISTANCE SET_MIN_EXTRUDE_TEMP FLOW_CALIBRATION ACTIVATE_EXTRUDER RESET_EXTRUDER |
 | Input shaper | SET_INPUT_SHAPER M593 |
@@ -82,7 +83,6 @@ subsystem behind them. They are accepted, do nothing, and log
 
 | Subsystem | Commands |
 |---|---|
-| Load-cell probing | PROBE PROBE_ACCURACY PROBE_CALIBRATE QUERY_PROBE CALIBRATE_Z_OFFSET CHECK_BED_MESH HOME_ACCURACY LIFT_HOT_BED MEASURE_GAP_TEST NOZZLE_CLEAR PRTOUCH_READY |
 | Accelerometer | SHAPER_CALIBRATE SHAPER_CALIBRATE_SCRIPT TEST_RESONANCES MEASURE_AXES_NOISE ACCELEROMETER_MEASURE_X ACCELEROMETER_QUERY_X ADXL345_DEBUG_READ_X ADXL345_DEBUG_WRITE_X |
 
 **Not on the Centauri Carbon.** Their klippy modules exist in the source
@@ -220,6 +220,50 @@ BED_MESH_PROFILE.
   - Only `[strain_gauge]`, `[hx711s]` and `[dirzctl]` register these
     commands. Without them, ccos answers `unknown command`, as the
     printer does.
+  - `PRTOUCH_READY` taps the four mesh corners (two taps each, up to
+    three tries) and prints `RDY_POS`/`GAP_POS`. Every tap starts at Z
+    `bed_max_err` + 1 and goes at most 10 mm down. The stock `bed_max_err:
+    20` is clamped to 10, so the taps start at Z11, never reach the bed and
+    read 0 (stock behaviour).
+  - `CHECK_BED_MESH [AUTO_G29=1]` taps 2–5 mm (random) inside each mesh
+    corner. With no mesh, it prints "The bed_mesh data is invalid and
+    cannot be verified."; with `AUTO_G29` it calibrates instead.
+    - A corner counts as bad when its *probed* Z is above `bed_max_err`.
+      The difference to the mesh is worked out and never used. More than
+      two bad corners re-level (or print the message).
+    - It makes the next `PRTOUCH_READY` do nothing.
+    - It sends `CXSAVE_CONFIG`, which nothing registers: `unknown command`.
+  - `MEASURE_GAP_TEST [INDEX=0..3]` taps a corner, then measures the gap
+    5 times: shake, then Z ±`gap_dis_range` while the cells sample. The
+    board sends no samples, so every gap is 0 and the result is
+    `Gap measure vals = 0 0 0 0 0` (as on the printer).
+  - `NOZZLE_CLEAR` does nothing: its body is empty.
+- **Probe** (`[probe]`, `[bed_mesh_probe]`, `probe.cpp`,
+  `auto_leveling.cpp`). Each tap is a `run_G29_Z` load-cell tap.
+  - `PROBE` samples with the `[probe]` settings (2 samples, 4 at the edges,
+    tolerance 0.05, 3 retries). The result is only logged.
+  - `QUERY_PROBE` does nothing.
+  - `PROBE_ACCURACY [SAMPLES=10]` (`[probe]`) and `HOME_ACCURACY`
+    (`[bed_mesh_probe]`):
+    - first Z goes to 0, then the taps run without lifting in between;
+    - then "probe accuracy results: maximum …, minimum …, range …,
+      average …, median …, standard deviation …";
+    - the deviation is summed into an `int` and divided as integers, so it
+      is nearly always 0.
+  - `LIFT_SPEED` is read and ignored everywhere.
+  - `PROBE_CALIBRATE` has no manual step:
+    - it takes the probed Z as the new offset at once and shifts the
+      current Z by it;
+    - it sets `[probe] z_offset` and `[stepper_z] position_endstop`, then
+      writes printer.cfg.
+  - `CALIBRATE_Z_OFFSET` homes Z with `position_endstop` 0, goes to Z5 and
+    runs `PROBE`. It saves −(result + 1) as `position_endstop` and
+    `position_endstop_extra` in printer.cfg and user_printer.cfg. If the
+    probe fails, `position_endstop` stays 0.
+  - `LIFT_HOT_BED [S=50]`:
+    - Z is set to 0 (homed), then it steps down S mm at `z_hop_speed`;
+    - when the load cells are pressed, it goes 5 mm back;
+    - afterwards Z is unhomed.
 - **Bed mesh** (`[bed_mesh]`, `[bed_mesh_probe]`).
   - The grid is 11×11 from (20, 20) to (246, 246), probed in a zig-zag
     from the front. It is interpolated bicubically with 3 points between
@@ -456,6 +500,9 @@ here; the additions only give meaning to lines the stock firmware ignores.
 | `G29` Z offset | `M8233 S%.3f` given an `int` | `M8233 S0.000 P1` | undefined behaviour |
 | `G29`/probing without `[strain_gauge]` | dereferences null | probing refused with an error | undefined behaviour |
 | Shutdown after a probe error | reason "" | the error text, so the screen says why | display only |
+| Load-cell corner tables | 3 rows, 4 read | the 4th corner is (max X, min Y), as the commented-out stock lines; the 4th gap point (max X − 1, min Y + 1) at 0.1 | undefined behaviour |
+| `MEASURE_GAP_TEST INDEX` outside 0–3 | reads past its table | refused | undefined behaviour |
+| Load-cell commands without `[bed_mesh]` | null dereference | do nothing | undefined behaviour |
 | Resume `set_position` | given X, Y, Z only; the toolhead reads E past the end | E keeps its current value | undefined behaviour |
 | After a power-loss save | `while(1){}` until the capacitor runs out | the watcher thread ends | undefined behaviour |
 | Power-loss save path | `/board-resource/` | the config folder (`<sim dir>/board-resource` in the emulator) | same folder on the printer |
@@ -479,6 +526,10 @@ here; the additions only give meaning to lines the stock firmware ignores.
     DIAG wire) with G28 carrying on with Y. The emulated drivers
     microstep at their pin default (1/8, 1/32 or 1/16 by address) and
     never stall-detect unless configured like this.
+  - `12_probe` runs the probe commands: PROBE, PROBE_ACCURACY,
+    HOME_ACCURACY, PRTOUCH_READY, CHECK_BED_MESH with and without a mesh,
+    MEASURE_GAP_TEST, LIFT_HOT_BED, PROBE_CALIBRATE and
+    CALIBRATE_Z_OFFSET.
   - `11_power_loss` cuts the power mid-print, then checks the save file,
     the boot prompt, `STOP_RESUME`, the finished part and the Cancel
     path.
