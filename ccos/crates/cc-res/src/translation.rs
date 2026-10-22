@@ -213,7 +213,8 @@ mod tests {
 
     #[test]
     fn shipped_csv_matches_shipped_text() {
-        // The shipped .bin was built from a CRLF copy of the CSV; compare text
+        // The shipped .bin was built from a CRLF copy of the CSV, and a Windows
+        // checkout (core.autocrlf) can make the CSV CRLF too: compare text
         // modulo line endings.
         let csv = std::fs::read_to_string(res("translation.csv")).unwrap();
         let ours = TranslationDb::parse_csv(&csv).unwrap();
@@ -222,7 +223,7 @@ mod tests {
         for (a, b) in ours.langs.iter().zip(&shipped.langs) {
             for (x, y) in a.iter().zip(b) {
                 assert_eq!(x.missing, y.missing);
-                assert_eq!(x.text, y.text.replace("\r\n", "\n"));
+                assert_eq!(x.text.replace("\r\n", "\n"), y.text.replace("\r\n", "\n"));
             }
         }
     }
